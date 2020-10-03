@@ -1,3 +1,9 @@
+# Build
+* Install CPLEX and add to the PATH.
+* 'mkdir _build'
+* 'cd _build'
+* 'cmake .. -A x64'
+
 # CPLEX lab
 Finding max clique problem.
 
