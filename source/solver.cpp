@@ -5,20 +5,16 @@
 #include <sstream>
 #include <stdexcept>
 
-std::vector<uint32_t> FindMaxClique(const Graph& graph)
+ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
+    : m_model(m_env)
+    , m_variables(m_env, graph.Size())
 {
-    IloEnv env{};
-    IloModel model(env);
-
     auto n = graph.Size();
-
-    // y[i] == 1 if y[1] is a max clique vertex
-    IloNumVarArray y(env, n);
 
     for (uint32_t i = 0; i < n; ++i)
     {
         std::string name = "y[" + std::to_string(i + 1) + "]";
-        y[i] = IloNumVar(env, 0, 1, IloNumVar::Bool, name.c_str());
+        m_variables[i] = IloNumVar(m_env, 0, 1, type, name.c_str());
     }
 
     std::vector<std::pair<uint32_t, uint32_t>> non_edge_pairs;
@@ -34,37 +30,78 @@ std::vector<uint32_t> FindMaxClique(const Graph& graph)
     }
 
     // if y[i] and y[j] has not edge - y[i] + y[j] <= 1
-    IloRangeArray constrains(env, non_edge_pairs.size());
+    IloRangeArray constrains(m_env, non_edge_pairs.size());
 
     uint32_t k = 0u;
     for (auto [i, j] : non_edge_pairs)
     {
-        IloExpr expr(env);
-        expr += y[i];
-        expr += y[j];
+        IloExpr expr(m_env);
+        expr += m_variables[i];
+        expr += m_variables[j];
         std::string name = "constr[" + std::to_string(i) + "][" + std::to_string(j) + "]";
-        constrains[k++] = IloRange(env, 0, expr, 1, name.c_str());
+        constrains[k++] = IloRange(m_env, 0, expr, 1, name.c_str());
     }
 
-    IloExpr obj_expr(env);
+    IloExpr obj_expr(m_env);
     for (uint32_t i = 0; i < n; ++i)
     {
-        obj_expr += y[i];
+        obj_expr += m_variables[i];
     }
-    IloObjective obj(env, obj_expr, IloObjective::Maximize);
+    IloObjective obj(m_env, obj_expr, IloObjective::Maximize);
 
-    model.add(constrains);
-    model.add(obj);
+    m_model.add(constrains);
+    m_model.add(obj);
+}
 
-    IloCplex cplex(model);
+IloCplex ModelData::CreateSolver() const
+{
+    return { m_model };
+}
+
+ConstrainsGuard ModelData::AddScopedConstrains(uint32_t variable_index, IloNum lowerBound, IloNum upperBound)
+{
+    IloExpr expr(m_env);
+    std::string name = std::to_string(lowerBound) + " <= y[" + std::to_string(variable_index) + "] <= " + std::to_string(upperBound);
+    expr += m_variables[variable_index];
+    IloRange new_constrain(m_env, lowerBound, expr, upperBound, name.c_str());
+    return ConstrainsGuard(m_model, m_model.add(new_constrain));
+}
+
+double ModelData::ExtractValue(const IloCplex& cplex, uint32_t variable_index)
+{
+    return cplex.getValue(m_variables[variable_index]);
+}
+
+ConstrainsGuard::ConstrainsGuard(IloModel& model, const IloExtractable& constrains)
+    : m_model(model)
+    , m_constrains(constrains)
+{
+}
+
+ConstrainsGuard::~ConstrainsGuard()
+{
+    m_model.remove(m_constrains);
+}
+
+std::vector<uint32_t> FindMaxCliqueInteger(const Graph& graph)
+{
+    ModelData model(graph, IloNumVar::Int);
+
+    IloCplex cplex = model.CreateSolver();
     cplex.exportModel("model.lp");
 
     bool solved = cplex.solve();
     std::vector<uint32_t> res;
+    std::vector<double> vars;
+
+    auto n = graph.Size();
+    auto obj_val = cplex.getObjValue();
     if (solved) {
         for (uint32_t i = 0; i < n; ++i)
         {
-            if (cplex.getValue(y[i]) > 0.)
+            auto val = model.ExtractValue(cplex, i);
+            vars.push_back(val);
+            if (val)
                 res.emplace_back(i);
         }
     }
