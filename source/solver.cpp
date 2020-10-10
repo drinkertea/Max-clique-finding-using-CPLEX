@@ -7,12 +7,22 @@
 #include <map>
 #include <set>
 
+std::map<uint32_t, std::set<uint32_t>> depended_verts;
+
 void AddIndependetConst(const Graph& graph, const IloNumVarArray& m_variables, IloEnv& m_env, IloModel& m_model, Graph::ColorizationType type)
 {
     auto verts_by_color = graph.Colorize(type);
     uint32_t k = 0;
     for (const auto& independed_nodes : verts_by_color)
     {
+        for (const auto& i : independed_nodes.second)
+            for (const auto& j : independed_nodes.second)
+                if (i != j)
+                {
+                    depended_verts[i].emplace(j);
+                    depended_verts[j].emplace(i);
+                }
+
         if (independed_nodes.second.size() <= 2)
             continue;
 
@@ -73,6 +83,9 @@ ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
     AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::default);
     AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::maxdegree);
     AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::mindegree);
+    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::random);
+    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::random);
+    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::random);
 
     m_model.add(constrains);
     m_model.add(obj);
@@ -161,8 +174,21 @@ size_t SelectBranch(const std::vector<double>& vars)
 {
     double max = std::numeric_limits<double>::min();
     size_t res = -1;
+    std::set<uint32_t> skip;
     for (size_t i = 0; i < vars.size(); ++i)
     {
+        if (EpsValue(vars[i] == 1.0))
+        {
+            for (const auto& d : depended_verts[i])
+                skip.emplace(d);
+        }
+    }
+
+    for (size_t i = 0; i < vars.size(); ++i)
+    {
+        if (skip.count(i))
+            continue;
+
         auto val = vars[i];
         if (IsInteger(val))
             continue;
@@ -203,9 +229,8 @@ struct BnBhelper
 
     void BnB()
     {
-        double lower = 0.0;
-        double upper = 0.0;
         size_t i = 0;
+        bool go_right_first = false;
         {
             auto [upper_bound, vars] = Solve(model);
             bc++;
@@ -235,16 +260,29 @@ struct BnBhelper
                 return;
 
             double var_value = vars[i];
-            lower = std::ceil(var_value);
-            upper = std::floor(var_value);
+            go_right_first = var_value - 0.4999999 > 0.0;
         }
+        if (go_right_first)
         {
-            auto guard = model.AddScopedConstrains(i, lower, IloInfinity);
-            BnB();
+            {
+                auto guard = model.AddScopedConstrains(i, 1.0, 1.0);
+                BnB();
+            }
+            {
+                auto guard = model.AddScopedConstrains(i, 0.0, 0.0);
+                BnB();
+            }
         }
+        else
         {
-            auto guard = model.AddScopedConstrains(i, 0.0, upper);
-            BnB();
+            {
+                auto guard = model.AddScopedConstrains(i, 0.0, 0.0);
+                BnB();
+            }
+            {
+                auto guard = model.AddScopedConstrains(i, 1.0, 1.0);
+                BnB();
+            }
         }
     }
 };

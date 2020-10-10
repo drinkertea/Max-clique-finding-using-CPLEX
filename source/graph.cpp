@@ -1,6 +1,7 @@
 #include <sstream>
 #include <fstream>
-
+#include <algorithm>
+#include <random>
 #include "graph.h"
 
 Graph::Graph(const std::string& path)
@@ -79,6 +80,11 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
         std::sort(nodes.begin(), nodes.end(), [](const auto& l, const auto& r) {
             return l.get().second.first.size() + l.get().second.second.size() < r.get().second.first.size() + r.get().second.second.size();
         });
+    } else if (type == ColorizationType::random)
+    {
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(nodes.begin(), nodes.end(), g);
     }
 
     for (const auto& node_wr : nodes)

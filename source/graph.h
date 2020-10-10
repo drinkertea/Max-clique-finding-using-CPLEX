@@ -21,6 +21,7 @@ struct Graph
         default = 0,
         mindegree,
         maxdegree,
+        random,
     };
 
     ColorToVerts Colorize(ColorizationType type) const;
