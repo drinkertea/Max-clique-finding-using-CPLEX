@@ -7,10 +7,28 @@
 #include <map>
 #include <set>
 
+void AddIndependetConst(const Graph& graph, const IloNumVarArray& m_variables, IloEnv& m_env, IloModel& m_model, Graph::ColorizationType type)
+{
+    auto verts_by_color = graph.Colorize(type);
+    uint32_t k = 0;
+    for (const auto& independed_nodes : verts_by_color)
+    {
+        if (independed_nodes.second.size() <= 2)
+            continue;
+
+        IloExpr expr(m_env);
+        for (const auto& i : independed_nodes.second)
+            expr += m_variables[i];
+        std::string name = "constr for color " + std::to_string(independed_nodes.first);
+        m_model.add(IloRange(m_env, 0, expr, 1, name.c_str()));
+    }
+}
+
 ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
     : m_model(m_env)
     , m_variables(m_env, graph.get().num_vertices())
     , m_graph(graph)
+    , m_size(graph.get().num_vertices())
 {
     auto n = graph.get().num_vertices();
 
@@ -51,6 +69,10 @@ ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
         obj_expr += m_variables[i];
     }
     IloObjective obj(m_env, obj_expr, IloObjective::Maximize);
+
+    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::default);
+    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::maxdegree);
+    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::mindegree);
 
     m_model.add(constrains);
     m_model.add(obj);
@@ -141,7 +163,34 @@ double DiffToInteger(double x)
     return std::abs(std::round(x) - x);
 }
 
-void BnB(ModelData& model, uint64_t& best_obj, std::set<uint32_t>& banned, bool is_first = false, size_t iff = -1)
+size_t ClosestToIntIndex(const IloCplex& cplex, const ModelData& model, std::vector<double>& out, uint64_t& int_cnt)
+{
+    double max = std::numeric_limits<double>::min();
+    size_t res = -1;
+    int_cnt = 0;
+
+    out.reserve(model.GetSize());
+    for (size_t i = 0; i < model.GetSize(); ++i)
+    {
+        auto val = model.ExtractValue(cplex, i);
+        out.push_back(val);
+        if (IsInteger(val))
+        {
+            if (EpsValue(val) == 1.0)
+                ++int_cnt;
+            continue;
+        }
+
+        if (val <= max)
+            continue;
+
+        max = val;
+        res = i;
+    }
+    return res;
+}
+
+void BnB(ModelData& model, uint64_t& best_obj)
 {
     IloCplex cplex = model.CreateSolver();
     if (!cplex.solve())
@@ -155,60 +204,31 @@ void BnB(ModelData& model, uint64_t& best_obj, std::set<uint32_t>& banned, bool 
     if (IsInteger(upper_bound) && IsIntegerSolution(cplex, model))
         best_obj = static_cast<uint64_t>(upper_bound);
 
-    auto i = -1;
+    std::vector<double> vals;
+    uint64_t int_cnt = 0;
+    auto i = ClosestToIntIndex(cplex, model, vals, int_cnt);
+    best_obj = std::max(int_cnt, best_obj);
+
     if (i == size_t(-1))
         return;
 
-    banned.emplace(i);
-
     double var_value = model.ExtractValue(cplex, i);
-
-    double left_res = 0;
-    double right_res = 0;
-    {
-        auto guard = model.AddScopedConstrains(i, 0.0, std::floor(var_value));
-        IloCplex cplex = model.CreateSolver();
-        if (cplex.solve())
-            left_res = cplex.getObjValue();
-    }
     {
         auto guard = model.AddScopedConstrains(i, std::ceil(var_value), IloInfinity);
-        IloCplex cplex = model.CreateSolver();
-        if (cplex.solve())
-            right_res = cplex.getObjValue();
+        BnB(model, best_obj);
     }
-
-    double ldiff = DiffToInteger(left_res);
-    double rdiff = DiffToInteger(right_res);
-    if (ldiff == rdiff ? right_res > left_res : rdiff < ldiff)
     {
-        {
-            auto guard = model.AddScopedConstrains(i, std::ceil(var_value), IloInfinity);
-            BnB(model, best_obj, banned);
-        }
-        {
-            auto guard = model.AddScopedConstrains(i, 0.0, std::floor(var_value));
-            BnB(model, best_obj, banned);
-        }
+        auto guard = model.AddScopedConstrains(i, 0.0, std::floor(var_value));
+        BnB(model, best_obj);
     }
-    else
-    {
-        {
-            auto guard = model.AddScopedConstrains(i, 0.0, std::floor(var_value));
-            BnB(model, best_obj, banned);
-        }
-        {
-            auto guard = model.AddScopedConstrains(i, std::ceil(var_value), IloInfinity);
-            BnB(model, best_obj, banned);
-        }
-    }
-
-    banned.erase(i);
 }
+
+uint64_t steps = 0;
 
 void BnBC(ModelData& model, const Graph& graph, uint64_t& best_obj, uint32_t n)
 {
     IloCplex cplex = model.CreateSolver();
+    steps++;
     if (!cplex.solve())
         return;
 
@@ -225,7 +245,7 @@ void BnBC(ModelData& model, const Graph& graph, uint64_t& best_obj, uint32_t n)
     if (IsInteger(upper_bound) && std::all_of(values.begin(), values.end(), [](double x) { return IsInteger(x); }))
         best_obj = static_cast<uint64_t>(upper_bound);
 
-    auto verts_by_color = graph.Colorize();
+    auto verts_by_color = graph.Colorize(Graph::ColorizationType::default);
     if (verts_by_color.size() <= best_obj)
         return;
 
@@ -254,12 +274,12 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     ModelData model(graph, IloNumVar::Float);
     auto n = graph.get().num_vertices();
 
-    uint64_t best_obj = 30;
+    uint64_t best_obj = 8;
 
     std::set<uint32_t> banned;
     std::vector<ConstrainsGuard> forever_constr;
 
-    BnBC(model, graph, best_obj, n);
+    BnB(model, best_obj);
     return{};
 
 }

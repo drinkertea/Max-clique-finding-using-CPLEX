@@ -16,9 +16,14 @@ struct Graph
 
     const NGraph::tGraph<uint32_t>& get() const { return m_graph; }
 
-    ColorToVerts Colorize() const;
+    enum class ColorizationType
+    {
+        default = 0,
+        mindegree,
+        maxdegree,
+    };
 
-
+    ColorToVerts Colorize(ColorizationType type) const;
 
 private:
     NGraph::tGraph<uint32_t> m_graph;

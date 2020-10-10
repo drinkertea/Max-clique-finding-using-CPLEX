@@ -48,11 +48,9 @@ Graph::Graph(const std::string& path)
             throw std::runtime_error("Invalid file format!");
         }
     }
-
-    Colorize();
 }
 
-Graph::ColorToVerts Graph::Colorize() const
+Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
 {
     auto n = m_graph.rbegin()->first + 1;
     constexpr uint32_t c_no_color = std::numeric_limits<uint32_t>::max();
@@ -63,8 +61,29 @@ Graph::ColorToVerts Graph::Colorize() const
 
     std::vector<bool> available(n, false);
 
+    std::vector<std::reference_wrapper<const std::pair<
+        const NGraph::tGraph<uint32_t>::vertex,
+        NGraph::tGraph<uint32_t>::in_out_edge_sets
+    >>> nodes;
+
     for (const auto& node : m_graph)
+        nodes.emplace_back(node);
+
+    if (type == ColorizationType::maxdegree)
     {
+        std::sort(nodes.begin(), nodes.end(), [](const auto& l, const auto& r) {
+            return l.get().second.first.size() + l.get().second.second.size() > r.get().second.first.size() + r.get().second.second.size();
+        });
+    } else if (type == ColorizationType::mindegree)
+    {
+        std::sort(nodes.begin(), nodes.end(), [](const auto& l, const auto& r) {
+            return l.get().second.first.size() + l.get().second.second.size() < r.get().second.first.size() + r.get().second.second.size();
+        });
+    }
+
+    for (const auto& node_wr : nodes)
+    {
+        const auto& node = node_wr.get();
         auto all = node.second.second + node.second.first;
         for (const auto& adj : all)
             if (colors.count(adj))
