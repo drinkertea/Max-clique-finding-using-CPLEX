@@ -30,6 +30,7 @@ Graph::Graph(const std::string& path)
                 continue;
 
             m_graph.resize(vertex_count, std::vector<bool>(vertex_count, false));
+            m_degrees.resize(vertex_count, 0);
         }
         else if (type == 'e')
         {
@@ -43,6 +44,9 @@ Graph::Graph(const std::string& path)
 
             m_graph[a - 1u][b - 1u] = true;
             m_graph[b - 1u][a - 1u] = true;
+
+            m_degrees[a - 1u]++;
+            m_degrees[b - 1u]++;
         }
         else
         {

@@ -20,7 +20,8 @@ int main()
         //Graph g("graphs/keller4.clq");
         //Graph g("graphs/p_hat300-1.clq");
         //Graph g("graphs/simple.clq");
-        auto result = FindMaxClique(g);
+        //auto result = FindMaxCliqueInteger(g);
+        auto result = FindMaxCliqueBnB(g);
 
         std::cout << "Max clique verticies:" << std::endl;
         for (auto y : result)
