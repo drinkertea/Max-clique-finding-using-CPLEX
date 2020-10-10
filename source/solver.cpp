@@ -80,7 +80,9 @@ ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
 
 IloCplex ModelData::CreateSolver() const
 {
-    return { m_model };
+    IloCplex res(m_model);
+    res.setOut(m_env.getNullStream());
+    return res;
 }
 
 ConstrainsGuard ModelData::AddScopedConstrains(uint32_t variable_index, IloNum lowerBound, IloNum upperBound)
