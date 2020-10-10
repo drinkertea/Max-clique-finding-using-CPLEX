@@ -85,11 +85,7 @@ IloCplex ModelData::CreateSolver() const
 
 ConstrainsGuard ModelData::AddScopedConstrains(uint32_t variable_index, IloNum lowerBound, IloNum upperBound)
 {
-    IloExpr expr(m_env);
-    std::string name = std::to_string(lowerBound) + " <= y[" + std::to_string(variable_index) + "] <= " + std::to_string(upperBound);
-    expr += m_variables[variable_index];
-    IloRange new_constrain(m_env, lowerBound, expr, upperBound, name.c_str());
-    return ConstrainsGuard(m_model, m_model.add(new_constrain));
+    return ConstrainsGuard(*this, variable_index, lowerBound, upperBound);
 }
 
 double ModelData::ExtractValue(const IloCplex& cplex, uint32_t variable_index) const
@@ -97,15 +93,21 @@ double ModelData::ExtractValue(const IloCplex& cplex, uint32_t variable_index) c
     return cplex.getValue(m_variables[variable_index]);
 }
 
-ConstrainsGuard::ConstrainsGuard(IloModel& model, const IloExtractable& constrains)
+ConstrainsGuard::ConstrainsGuard(ModelData& model, uint32_t variable_index, IloNum lowerBound, IloNum upperBound)
     : m_model(model)
-    , m_constrains(constrains)
+    , m_expr(m_model.m_env)
 {
+    std::string name = std::to_string(lowerBound) + " <= y[" + std::to_string(variable_index) + "] <= " + std::to_string(upperBound);
+    m_expr += m_model.m_variables[variable_index];
+    m_constrain = IloRange(m_model.m_env, lowerBound, m_expr, upperBound, name.c_str());
+    m_constrains = m_model.m_model.add(m_constrain);
 }
 
 ConstrainsGuard::~ConstrainsGuard()
 {
-    m_model.remove(m_constrains);
+    m_model.m_model.remove(m_constrains);
+    m_constrain.end();
+    m_expr.end();
 }
 
 std::vector<uint32_t> FindMaxCliqueInteger(const Graph& graph)
@@ -148,38 +150,20 @@ bool IsInteger(double x)
     return EpsValue(x) == std::round(x);
 }
 
-bool IsIntegerSolution(const IloCplex& cplex, const ModelData& model)
-{
-    for (size_t i = 0; i < model.GetSize(); ++i)
-    {
-        if (!IsInteger(model.ExtractValue(cplex, i)))
-            return false;
-    }
-    return true;
-}
-
 double DiffToInteger(double x)
 {
     return std::abs(std::round(x) - x);
 }
 
-size_t ClosestToIntIndex(const IloCplex& cplex, const ModelData& model, std::vector<double>& out, uint64_t& int_cnt)
+size_t ClosestToIntIndex(const std::vector<double>& vars)
 {
     double max = std::numeric_limits<double>::min();
     size_t res = -1;
-    int_cnt = 0;
-
-    out.reserve(model.GetSize());
-    for (size_t i = 0; i < model.GetSize(); ++i)
+    for (size_t i = 0; i < vars.size(); ++i)
     {
-        auto val = model.ExtractValue(cplex, i);
-        out.push_back(val);
+        auto val = vars[i];
         if (IsInteger(val))
-        {
-            if (EpsValue(val) == 1.0)
-                ++int_cnt;
             continue;
-        }
 
         if (val <= max)
             continue;
@@ -190,29 +174,41 @@ size_t ClosestToIntIndex(const IloCplex& cplex, const ModelData& model, std::vec
     return res;
 }
 
-void BnB(ModelData& model, uint64_t& best_obj)
+std::tuple<double, std::vector<double>> Solve(ModelData& model)
 {
     IloCplex cplex = model.CreateSolver();
     if (!cplex.solve())
-        return;
+        return { 0.0, {} };
 
-    auto upper_bound = cplex.getObjValue();
+    std::vector<double> vars(model.GetSize(), 0.0);
+    for (size_t i = 0; i < model.GetSize(); ++i)
+        vars[i] = model.ExtractValue(cplex, i);
+
+    auto result = std::make_tuple(cplex.getObjValue(), std::move(vars));
+    cplex.end();
+    return result;
+}
+
+void BnB(ModelData& model, uint64_t& best_obj)
+{
+    auto [upper_bound, vars] = Solve(model);
 
     if (EpsValue(upper_bound) <= static_cast<double>(best_obj))
         return;
 
-    if (IsInteger(upper_bound) && IsIntegerSolution(cplex, model))
-        best_obj = static_cast<uint64_t>(upper_bound);
-
-    std::vector<double> vals;
-    uint64_t int_cnt = 0;
-    auto i = ClosestToIntIndex(cplex, model, vals, int_cnt);
-    best_obj = std::max(int_cnt, best_obj);
+    if (IsInteger(upper_bound))
+    {
+        auto int_count = std::count_if(vars.begin(), vars.end(), [](double x) { return EpsValue(x) == 1.0; });
+        if (int_count > best_obj)
+            best_obj = static_cast<uint64_t>(int_count);
+        //best_obj = static_cast<uint64_t>(upper_bound);
+    }
+    auto i = ClosestToIntIndex(vars);
 
     if (i == size_t(-1))
         return;
 
-    double var_value = model.ExtractValue(cplex, i);
+    double var_value = vars[i];
     {
         auto guard = model.AddScopedConstrains(i, std::ceil(var_value), IloInfinity);
         BnB(model, best_obj);
@@ -220,52 +216,6 @@ void BnB(ModelData& model, uint64_t& best_obj)
     {
         auto guard = model.AddScopedConstrains(i, 0.0, std::floor(var_value));
         BnB(model, best_obj);
-    }
-}
-
-uint64_t steps = 0;
-
-void BnBC(ModelData& model, const Graph& graph, uint64_t& best_obj, uint32_t n)
-{
-    IloCplex cplex = model.CreateSolver();
-    steps++;
-    if (!cplex.solve())
-        return;
-
-    auto upper_bound = cplex.getObjValue();
-    if (EpsValue(upper_bound) <= static_cast<double>(best_obj))
-        return;
-
-    std::vector<double> values(n, 0);
-    for (uint32_t i = 0; i < n; ++i)
-    {
-        values[i] = model.ExtractValue(cplex, i);
-    }
-
-    if (IsInteger(upper_bound) && std::all_of(values.begin(), values.end(), [](double x) { return IsInteger(x); }))
-        best_obj = static_cast<uint64_t>(upper_bound);
-
-    auto verts_by_color = graph.Colorize(Graph::ColorizationType::default);
-    if (verts_by_color.size() <= best_obj)
-        return;
-
-    while (!verts_by_color.empty())
-    {
-        auto& color_data = *verts_by_color.rbegin();
-        uint32_t color_value = color_data.first;
-        uint32_t vertex_index = color_data.second.back();
-        if (EpsValue(upper_bound) + static_cast<double>(color_value) <= best_obj)
-            return;
-
-        double var_value = values[vertex_index];
-        {
-            auto guard = model.AddScopedConstrains(vertex_index, 1.0, IloInfinity);
-            BnBC(model, Graph(graph.get().subgraph(graph.get().in_neighbors(vertex_index) + graph.get().out_neighbors(vertex_index))), best_obj, n);
-        }
-
-        color_data.second.pop_back();
-        if (color_data.second.empty())
-            verts_by_color.erase(color_value);
     }
 }
 

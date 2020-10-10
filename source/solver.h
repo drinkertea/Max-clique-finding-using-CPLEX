@@ -10,14 +10,18 @@
 
 struct Graph;
 
+struct ModelData;
+
 struct ConstrainsGuard
 {
-    ConstrainsGuard(IloModel& model, const IloExtractable& constrains);
+    ConstrainsGuard(ModelData& model, uint32_t variable_index, IloNum lowerBound, IloNum upperBound);
     ~ConstrainsGuard();
 
 private:
-    IloModel&            m_model;
-    const IloExtractable m_constrains;
+    ModelData& m_model;
+    IloExpr m_expr;
+    IloRange m_constrain;
+    IloExtractable m_constrains;
 };
 
 struct ModelData
@@ -31,6 +35,8 @@ struct ModelData
     const Graph&    GetGraph() const { return m_graph; }
 
 private:
+    friend struct ConstrainsGuard;
+
     const Graph& m_graph;
     IloEnv          m_env{};
     IloModel        m_model;
