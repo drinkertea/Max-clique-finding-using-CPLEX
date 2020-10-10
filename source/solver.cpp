@@ -157,7 +157,7 @@ double DiffToInteger(double x)
     return std::abs(std::round(x) - x);
 }
 
-size_t ClosestToIntIndex(const std::vector<double>& vars)
+size_t SelectBranch(const std::vector<double>& vars)
 {
     double max = std::numeric_limits<double>::min();
     size_t res = -1;
@@ -191,35 +191,64 @@ std::tuple<double, std::vector<double>> Solve(ModelData& model)
     return result;
 }
 
-void BnB(ModelData& model, uint64_t& best_obj)
+uint64_t bc = 0;
+
+struct BnBhelper
 {
-    auto [upper_bound, vars] = Solve(model);
+    ModelData& model;
 
-    if (EpsValue(upper_bound) <= static_cast<double>(best_obj))
-        return;
+    BnBhelper(ModelData& m) : model(m) {};
 
-    if (IsInteger(upper_bound))
+    uint64_t best_obj = 1;
+
+    void BnB()
     {
-        auto int_count = std::count_if(vars.begin(), vars.end(), [](double x) { return EpsValue(x) == 1.0; });
-        if (int_count > best_obj)
-            best_obj = static_cast<uint64_t>(int_count);
-        //best_obj = static_cast<uint64_t>(upper_bound);
-    }
-    auto i = ClosestToIntIndex(vars);
+        double lower = 0.0;
+        double upper = 0.0;
+        size_t i = 0;
+        {
+            auto [upper_bound, vars] = Solve(model);
+            bc++;
 
-    if (i == size_t(-1))
-        return;
+            if (EpsValue(upper_bound) <= static_cast<double>(best_obj))
+                return;
 
-    double var_value = vars[i];
-    {
-        auto guard = model.AddScopedConstrains(i, std::ceil(var_value), IloInfinity);
-        BnB(model, best_obj);
+            if (IsInteger(upper_bound))
+            {
+                uint64_t int_count = 0;
+                for (auto x : vars)
+                    int_count += uint64_t(EpsValue(x) == 1.0);
+                if (int_count > best_obj)
+                {
+                    best_obj = static_cast<uint64_t>(int_count);
+                    std::cout << "Found " << best_obj << " " << bc << std::endl;
+                    for (uint64_t i = 0; i < vars.size(); ++i)
+                        if (vars[i] > 0.)
+                            std::cout << i << " ";
+                    std::cout << std::endl;
+                    std::cout << std::endl;
+                }
+            }
+
+            i = SelectBranch(vars);
+            if (i == size_t(-1))
+                return;
+
+            double var_value = vars[i];
+            lower = std::ceil(var_value);
+            upper = std::floor(var_value);
+        }
+        {
+            auto guard = model.AddScopedConstrains(i, lower, IloInfinity);
+            BnB();
+        }
+        {
+            auto guard = model.AddScopedConstrains(i, 0.0, upper);
+            BnB();
+        }
     }
-    {
-        auto guard = model.AddScopedConstrains(i, 0.0, std::floor(var_value));
-        BnB(model, best_obj);
-    }
-}
+};
+
 
 std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
 {
@@ -231,7 +260,8 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     std::set<uint32_t> banned;
     std::vector<ConstrainsGuard> forever_constr;
 
-    BnB(model, best_obj);
+    BnBhelper bnbh(model);
+    bnbh.BnB();
     return{};
 
 }

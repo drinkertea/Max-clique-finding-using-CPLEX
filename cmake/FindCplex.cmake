@@ -17,8 +17,9 @@ if(WIN32)
     MESSAGE(STATUS "Found CLPEX version ${CPLEX_WIN_VERSION} at '${CPLEX_ROOT_DIR}'")
 
 
-    # For release build set(CPLEX_WIN_PLATFORM "x64_windows_msvc14/stat_mda")
-    set(CPLEX_WIN_PLATFORM "x64_windows_msvc14/stat_mdd")
+    # For release build 
+    set(CPLEX_WIN_PLATFORM "x64_windows_msvc14/stat_mda")
+    #set(CPLEX_WIN_PLATFORM "x64_windows_msvc14/stat_mdd")
 
 else()
 
