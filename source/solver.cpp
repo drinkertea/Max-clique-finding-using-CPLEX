@@ -9,11 +9,10 @@
 
 ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
     : m_model(m_env)
-    , m_variables(m_env, graph.Size())
-    , m_size(graph.Size())
+    , m_variables(m_env, graph.get().num_vertices())
     , m_graph(graph)
 {
-    auto n = graph.Size();
+    auto n = graph.get().num_vertices();
 
     for (uint32_t i = 0; i < n; ++i)
     {
@@ -26,7 +25,7 @@ ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
     {
         for (uint32_t j = i + 1; j < n; ++j)
         {
-            if (graph.HasEdge(i, j))
+            if (graph.get().out_neighbors(i).count(j))
                 continue;
 
             non_edge_pairs.emplace_back(i, j);
@@ -98,7 +97,7 @@ std::vector<uint32_t> FindMaxCliqueInteger(const Graph& graph)
     std::vector<uint32_t> res;
     std::vector<double> vars;
 
-    auto n = graph.Size();
+    auto n = graph.get().num_vertices();
     auto obj_val = cplex.getObjValue();
     if (solved) {
         for (uint32_t i = 0; i < n; ++i)
@@ -207,17 +206,60 @@ void BnB(ModelData& model, uint64_t& best_obj, std::set<uint32_t>& banned, bool 
     banned.erase(i);
 }
 
+void BnBC(ModelData& model, const Graph& graph, uint64_t& best_obj, uint32_t n)
+{
+    IloCplex cplex = model.CreateSolver();
+    if (!cplex.solve())
+        return;
+
+    auto upper_bound = cplex.getObjValue();
+    if (EpsValue(upper_bound) <= static_cast<double>(best_obj))
+        return;
+
+    std::vector<double> values(n, 0);
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        values[i] = model.ExtractValue(cplex, i);
+    }
+
+    if (IsInteger(upper_bound) && std::all_of(values.begin(), values.end(), [](double x) { return IsInteger(x); }))
+        best_obj = static_cast<uint64_t>(upper_bound);
+
+    auto verts_by_color = graph.Colorize();
+    if (verts_by_color.size() <= best_obj)
+        return;
+
+    while (!verts_by_color.empty())
+    {
+        auto& color_data = *verts_by_color.rbegin();
+        uint32_t color_value = color_data.first;
+        uint32_t vertex_index = color_data.second.back();
+        if (EpsValue(upper_bound) + static_cast<double>(color_value) <= best_obj)
+            return;
+
+        double var_value = values[vertex_index];
+        {
+            auto guard = model.AddScopedConstrains(vertex_index, 1.0, IloInfinity);
+            BnBC(model, Graph(graph.get().subgraph(graph.get().in_neighbors(vertex_index) + graph.get().out_neighbors(vertex_index))), best_obj, n);
+        }
+
+        color_data.second.pop_back();
+        if (color_data.second.empty())
+            verts_by_color.erase(color_value);
+    }
+}
+
 std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
 {
     ModelData model(graph, IloNumVar::Float);
-    auto n = graph.Size();
+    auto n = graph.get().num_vertices();
 
-    uint64_t best_obj = 1;
+    uint64_t best_obj = 30;
 
     std::set<uint32_t> banned;
     std::vector<ConstrainsGuard> forever_constr;
 
-
+    BnBC(model, graph, best_obj, n);
     return{};
 
 }

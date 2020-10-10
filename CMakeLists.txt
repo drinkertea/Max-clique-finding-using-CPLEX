@@ -14,6 +14,7 @@ set(SOURCES
     source/solver.h
     source/solver.cpp
     source/main.cpp
+    source/ngraph.hpp
 )
 
 add_executable(${TARGET} ${SOURCES})

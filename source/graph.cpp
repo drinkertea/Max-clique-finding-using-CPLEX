@@ -5,6 +5,8 @@
 
 Graph::Graph(const std::string& path)
 {
+    m_graph.set_undirected();
+
     std::ifstream infile(path);
     if (!infile)
         throw std::runtime_error("Invalid file path!");
@@ -28,9 +30,6 @@ Graph::Graph(const std::string& path)
             uint32_t edge_count   = 0u;
             if (!(iss >> name >> vertex_count >> edge_count))
                 continue;
-
-            m_graph.resize(vertex_count, std::vector<bool>(vertex_count, false));
-            m_degrees.resize(vertex_count, 0);
         }
         else if (type == 'e')
         {
@@ -42,15 +41,47 @@ Graph::Graph(const std::string& path)
             if (!a || !b)
                 throw std::runtime_error("Unexpected vertex index!");
 
-            m_graph[a - 1u][b - 1u] = true;
-            m_graph[b - 1u][a - 1u] = true;
-
-            m_degrees[a - 1u]++;
-            m_degrees[b - 1u]++;
+            m_graph.insert_edge(a - 1u, b - 1u);
         }
         else
         {
             throw std::runtime_error("Invalid file format!");
         }
     }
+
+    Colorize();
+}
+
+Graph::ColorToVerts Graph::Colorize() const
+{
+    auto n = m_graph.rbegin()->first + 1;
+    constexpr uint32_t c_no_color = std::numeric_limits<uint32_t>::max();
+
+    ColorToVerts result;
+    std::map<uint32_t, uint32_t> colors = { { m_graph.begin()->first, 0 } };
+    result[0].emplace_back(m_graph.begin()->first);
+
+    std::vector<bool> available(n, false);
+
+    for (const auto& node : m_graph)
+    {
+        auto all = node.second.second + node.second.first;
+        for (const auto& adj : all)
+            if (colors.count(adj))
+                available[colors[adj]] = true;
+
+        uint32_t cr = 0;
+        for (; cr < n; cr++)
+            if (available[cr] == false)
+                break;
+
+        colors[node.first] = cr;
+        result[cr].emplace_back(node.first);
+
+        for (const auto& adj : all)
+            if (colors.count(adj))
+                available[colors[adj]] = false;
+    }
+
+    return result;
 }

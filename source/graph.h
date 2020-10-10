@@ -4,15 +4,22 @@
 #include <string>
 #include <vector>
 
+#include "ngraph.hpp"
+
 struct Graph
 {
+    using ColorToVerts = std::map<uint32_t, std::vector<uint32_t>>;
+
     explicit Graph(const std::string& path);
 
-    bool   HasEdge(uint32_t i, uint32_t j) const { return m_graph.at(i).at(j); }
-    size_t Size() const { return m_graph.size(); }
-    uint64_t GetDegree(uint32_t i) const { return m_degrees[i]; }
+    explicit Graph(NGraph::tGraph<uint32_t> g) : m_graph(std::move(g)) {}
+
+    const NGraph::tGraph<uint32_t>& get() const { return m_graph; }
+
+    ColorToVerts Colorize() const;
+
+
 
 private:
-    std::vector<std::vector<bool>> m_graph;
-    std::vector<uint64_t> m_degrees;
+    NGraph::tGraph<uint32_t> m_graph;
 };
