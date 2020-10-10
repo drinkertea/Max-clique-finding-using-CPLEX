@@ -7,22 +7,12 @@
 #include <map>
 #include <set>
 
-std::map<uint32_t, std::set<uint32_t>> depended_verts;
-
 void AddIndependetConst(const Graph& graph, const IloNumVarArray& m_variables, IloEnv& m_env, IloModel& m_model, Graph::ColorizationType type)
 {
     auto verts_by_color = graph.Colorize(type);
     uint32_t k = 0;
     for (const auto& independed_nodes : verts_by_color)
     {
-        for (const auto& i : independed_nodes.second)
-            for (const auto& j : independed_nodes.second)
-                if (i != j)
-                {
-                    depended_verts[i].emplace(j);
-                    depended_verts[j].emplace(i);
-                }
-
         if (independed_nodes.second.size() <= 2)
             continue;
 
@@ -174,24 +164,20 @@ size_t SelectBranch(const std::vector<double>& vars)
 {
     double max = std::numeric_limits<double>::min();
     size_t res = -1;
-    std::set<uint32_t> skip;
-    for (size_t i = 0; i < vars.size(); ++i)
-    {
-        if (EpsValue(vars[i] == 1.0))
-        {
-            for (const auto& d : depended_verts[i])
-                skip.emplace(d);
-        }
-    }
+
+    std::vector<uint32_t> halfs;
 
     for (size_t i = 0; i < vars.size(); ++i)
     {
-        if (skip.count(i))
-            continue;
-
         auto val = vars[i];
         if (IsInteger(val))
             continue;
+
+        if (EpsValue(val) == 0.5)
+        {
+            halfs.emplace_back(i);
+            continue;
+        }
 
         if (val <= max)
             continue;
@@ -199,6 +185,12 @@ size_t SelectBranch(const std::vector<double>& vars)
         max = val;
         res = i;
     }
+
+    if (res == -1 && !halfs.empty())
+    {
+        return halfs[rand() % halfs.size()];
+    }
+
     return res;
 }
 
@@ -243,7 +235,7 @@ struct BnBhelper
                 uint64_t int_count = 0;
                 for (auto x : vars)
                     int_count += uint64_t(EpsValue(x) == 1.0);
-                if (int_count > best_obj)
+                if (int_count >= best_obj)
                 {
                     best_obj = static_cast<uint64_t>(int_count);
                     std::cout << "Found " << best_obj << " " << bc << std::endl;
@@ -261,6 +253,8 @@ struct BnBhelper
 
             double var_value = vars[i];
             go_right_first = var_value - 0.4999999 > 0.0;
+            if (EpsValue(var_value) == 0.5)
+                go_right_first = rand() % 2;
         }
         if (go_right_first)
         {
