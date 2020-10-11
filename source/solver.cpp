@@ -238,9 +238,14 @@ constexpr size_t g_invalid_index = std::numeric_limits<size_t>::max();
 struct BnBhelper
 {
     ModelData& model;
+    const Graph& graph;
 
     uint64_t bc = 0;
-    BnBhelper(ModelData& m) : model(m) {};
+    BnBhelper(ModelData& m, const Graph& g)
+        : model(m)
+        , graph(g)
+    {
+    };
 
     uint64_t best_obj = 1;
 
@@ -305,8 +310,68 @@ struct BnBhelper
         return res;
     }
 
+    uint32_t max_depth = 0;
+    using Path = std::vector<std::pair<size_t, double>>;
+    std::map<Path, Solution> branches;
+
+    size_t curr_var = g_invalid_index;
+    double curr_way = 0.0;
+    Path curr_path;
+
+    struct DepthGuard
+    {
+        Path& path;
+        DepthGuard(Path& p)
+            : path(p)
+        {
+        }
+
+        ~DepthGuard()
+        {
+            path.pop_back();
+        }
+    };
+
+    void PrintAndValidate(const Solution& solution)
+    {
+        std::cout << "Found " << best_obj << " " << bc << std::endl;
+
+        std::set<uint32_t> clique;
+        for (uint64_t i = 0; i < solution.vars.size(); ++i)
+            if (EpsValue(solution.vars[i]) == 1.0)
+            {
+                std::cout << i << " ";
+                clique.emplace(i);
+            }
+
+        bool valid = true;
+        for (auto v : clique)
+        {
+            auto neights = graph.get().in_neighbors(v) + graph.get().out_neighbors(v);
+            for (auto v1 : clique)
+            {
+                if (v != v1 && !neights.count(v1))
+                    valid = false;
+            }
+        }
+        std::cout << std::endl;
+        std::cout << "Valid " << (valid ? "True" : "False") << std::endl;
+
+        std::cout << std::endl;
+        std::cout << std::endl;
+    }
+
     void BnB(const Solution& solution)
     {
+        //if (curr_var != g_invalid_index)
+        //    curr_path.emplace_back(curr_var, curr_way);
+        //DepthGuard dg(curr_path);
+        //if (curr_path.size() > max_depth)
+        //{
+        //    branches.emplace(curr_path, solution);
+        //    return;
+        //}
+
         bc++;
 
         if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj))
@@ -317,12 +382,7 @@ struct BnBhelper
             if (solution.int_count >= best_obj)
             {
                 best_obj = static_cast<uint64_t>(solution.int_count);
-                std::cout << "Found " << best_obj << " " << bc << std::endl;
-                for (uint64_t i = 0; i < solution.vars.size(); ++i)
-                    if (solution.vars[i] > 0.999999)
-                        std::cout << i << " ";
-                std::cout << std::endl;
-                std::cout << std::endl;
+                PrintAndValidate(solution);
             }
         }
 
@@ -344,31 +404,24 @@ struct BnBhelper
         double rdiff = DiffToInteger(right_solution.upper_bound);
         double ldiff = DiffToInteger(left_solution.upper_bound);
 
-        bool go_right = rdiff < ldiff;
-        if (EpsValue(rdiff) == EpsValue(ldiff))
+        bool go_right = right_solution.int_count > left_solution.int_count;
+        if (right_solution.int_count == left_solution.int_count)
             go_right = right_solution.upper_bound > left_solution.upper_bound;
 
+        double first_way = 0.0;
+        double second_way = 1.0;
         if (go_right)
+            std::swap(first_way, second_way);
+
         {
-            {
-                auto guard = model.AddScopedConstrains(i, 1.0, 1.0);
-                BnB(right_solution);
-            }
-            {
-                auto guard = model.AddScopedConstrains(i, 0.0, 0.0);
-                BnB(left_solution);
-            }
+            auto guard = model.AddScopedConstrains(i, first_way, first_way);
+            curr_way = first_way;
+            BnB(right_solution);
         }
-        else
         {
-            {
-                auto guard = model.AddScopedConstrains(i, 0.0, 0.0);
-                BnB(left_solution);
-            }
-            {
-                auto guard = model.AddScopedConstrains(i, 1.0, 1.0);
-                BnB(right_solution);
-            }
+            auto guard = model.AddScopedConstrains(i, second_way, second_way);
+            curr_way = second_way;
+            BnB(left_solution);
         }
     }
 };
@@ -409,7 +462,7 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     std::set<uint32_t> curr_clique;
     Heuristic(graph, curr_clique);
 
-    BnBhelper bnbh(model);
+    BnBhelper bnbh(model, graph);
     auto initial_solution = bnbh.Solve();
     std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl << std::endl;
 
@@ -420,6 +473,8 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     initial_solution.max_non_int_index = bnbh.SelectBranch(initial_solution.vars);
     initial_solution.upper_bound = static_cast<double>(curr_clique.size());
     initial_solution.int_count = curr_clique.size();
+
+    bnbh.max_depth = 5;
     bnbh.BnB(initial_solution);
 
     std::cout << "Total branches: " << bnbh.bc << std::endl << std::endl;
