@@ -7,7 +7,10 @@
 #include <map>
 #include <set>
 #include <array>
-
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <atomic>
 
 struct ModelData;
 struct ConstrainsGuard
@@ -53,6 +56,11 @@ struct ModelData
         InitModel();
     }
 
+    ~ModelData()
+    {
+        m_env.end();
+    }
+
     void InitModel()
     {
         for (uint32_t i = 0; i < m_size; ++i)
@@ -93,6 +101,11 @@ struct ModelData
     ConstrainsGuard AddScopedConstrains(size_t variable_index, IloNum lowerBound, IloNum upperBound)
     {
         return ConstrainsGuard(*this, variable_index, lowerBound, upperBound);
+    }
+
+    std::unique_ptr<ConstrainsGuard> AddScopedConstrainsPtr(size_t variable_index, IloNum lowerBound, IloNum upperBound)
+    {
+        return std::make_unique<ConstrainsGuard>(*this, variable_index, lowerBound, upperBound);
     }
 
     double ExtractValue(const IloCplex& cplex, size_t variable_index) const
@@ -293,6 +306,8 @@ private:
     Path                     curr_path;
 };
 
+class BnBHelper;
+
 struct Printer
 {
     Printer(const Graph& g)
@@ -300,36 +315,23 @@ struct Printer
     {
     }
 
-    void PrintAndValidate(const Solution& solution, uint64_t bc) const
+    void AddCallback(const std::shared_ptr<BnBHelper>& callback)
     {
-        std::cout << "Found " << solution.int_count << " " << bc << std::endl;
-
-        std::set<uint32_t> clique;
-        for (uint64_t i = 0; i < solution.vars.size(); ++i)
-            if (EpsValue(solution.vars[i]) == 1.0)
-            {
-                std::cout << i << " ";
-                clique.emplace(i);
-            }
-
-        bool valid = true;
-        for (auto v : clique)
-        {
-            auto neights = graph.get().in_neighbors(v) + graph.get().out_neighbors(v);
-            for (auto v1 : clique)
-            {
-                if (v != v1 && !neights.count(v1))
-                    valid = false;
-            }
-        }
-        std::cout << std::endl;
-        std::cout << "Valid " << (valid ? "True" : "False") << std::endl;
-
-        std::cout << std::endl;
-        std::cout << std::endl;
+        std::lock_guard<std::mutex> lg(print_mutex);
+        best_upd_callbacks.emplace_back(callback);
     }
 
+    uint64_t GetBest() const
+    {
+        return best_obj;
+    }
+
+    void PrintAndValidate(const Solution& solution, uint64_t bc);
+
 private:
+    uint64_t best_obj = 0;
+    std::vector<std::weak_ptr<BnBHelper>> best_upd_callbacks;
+    std::mutex print_mutex;
     const Graph& graph;
 };
 
@@ -351,10 +353,11 @@ class BnBHelper
     };
 
 public:
-    BnBHelper(ModelData& m, Printer& p, BranchingCallback* callback = nullptr)
+    BnBHelper(ModelData& m, Printer& p, uint64_t best, BranchingCallback* callback = nullptr)
         : model(m)
         , printer(p)
         , branch_callback(callback)
+        , best_obj(best)
     {
     };
 
@@ -363,11 +366,17 @@ public:
         return bc;
     }
 
+    void NewBestObj(uint64_t newval)
+    {
+        best_obj = std::max(newval, best_obj);
+    }
+
     Solution Solve()
     {
         Solution res{};
 
         IloCplex cplex = model.CreateSolver();
+        cplex.setParam(IloCplex::Param::Threads, 1);
         if (!cplex.solve())
             return res;
 
@@ -450,7 +459,6 @@ public:
         if (i == g_invalid_index)
             return;
 
-
         BranchingData right{ 1.0 };
         {
             auto guard = model.AddScopedConstrains(i, right.way, right.way);
@@ -483,6 +491,89 @@ public:
             Branching(left_ref.get().res, i, left_ref.get().way);
         }
     }
+};
+
+void Printer::PrintAndValidate(const Solution& solution, uint64_t bc)
+{
+    std::lock_guard<std::mutex> lg(print_mutex);
+    if (solution.int_count > best_obj)
+    {
+        best_obj = solution.int_count;
+        for (auto& callback : best_upd_callbacks)
+        {
+            auto catch_obj = callback.lock();
+            if (!catch_obj)
+                continue;
+
+            catch_obj->NewBestObj(best_obj);
+        }
+    }
+
+    std::cout << "Found " << solution.int_count << " " << bc << std::endl;
+
+    std::set<uint32_t> clique;
+    for (uint64_t i = 0; i < solution.vars.size(); ++i)
+        if (EpsValue(solution.vars[i]) == 1.0)
+        {
+            std::cout << i << " ";
+            clique.emplace(i);
+        }
+
+    bool valid = true;
+    for (auto v : clique)
+    {
+        auto neights = graph.get().in_neighbors(v) + graph.get().out_neighbors(v);
+        for (auto v1 : clique)
+        {
+            if (v != v1 && !neights.count(v1))
+                valid = false;
+        }
+    }
+    std::cout << std::endl;
+    std::cout << "Valid " << (valid ? "True" : "False") << std::endl;
+
+    std::cout << std::endl;
+    std::cout << std::endl;
+}
+
+struct ParallelExecturor
+{
+    using Task = std::function<void()>;
+    using Tasks = std::deque<Task>;
+    ParallelExecturor(Tasks&& tasks, uint32_t thread_count = 0)
+        : tasks(std::move(tasks))
+    {
+        uint32_t n = thread_count;
+        if (n <= 0)
+            n = std::max(std::thread::hardware_concurrency(), 1u);
+        for (uint32_t i = 0; i < n; ++i)
+            execution_threads.emplace_back(&ParallelExecturor::ExecutionThread, this);
+    }
+
+    void WaitForJobDone()
+    {
+        for (auto& thred : execution_threads)
+            thred.join();
+    }
+
+private:
+    void ExecutionThread()
+    {
+        while (!tasks.empty())
+        {
+            Task task;
+            {
+                std::unique_lock<std::mutex> lock(tasks_mutex);
+                task.swap(tasks.front());
+                tasks.pop_front();
+            }
+            task();
+        }
+    }
+
+    std::deque<Task>         tasks;
+    std::mutex               tasks_mutex;
+    std::vector<std::thread> execution_threads;
 };
 
 void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique)
@@ -531,15 +622,41 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     auto n = graph.get().num_vertices();
 
     Printer printer(graph);
-    BranchingCallback first_branching(5);
+    BranchingCallback first_branching(7);
 
-    BnBHelper bnbh(model, printer/*, &first_branching*/);
+    BnBHelper bnbh(model, printer, 1, &first_branching);
     auto initial_solution = bnbh.Solve();
     std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl << std::endl;
 
     AddHeuristicSolution(bnbh, graph, initial_solution);
 
     bnbh.BnB(initial_solution);
+
+    ParallelExecturor::Tasks tasks;
+    std::atomic<size_t> finished_index = 0;
+    std::atomic<size_t> tasks_total = 0;
+    for (const auto& first_branches : first_branching.GetBranches())
+    {
+        const auto& path = first_branches.first;
+        const auto& solution = first_branches.second;
+        tasks.push_back([path, solution, &model, &printer, &finished_index, &tasks_total]() {
+            ModelData copy_model(model);
+
+            std::vector<std::unique_ptr<ConstrainsGuard>> path_constr;
+            for (const auto& branch : path)
+                path_constr.push_back(copy_model.AddScopedConstrainsPtr(branch.first, branch.second, branch.second));
+
+            auto helper = std::make_shared<BnBHelper>(copy_model, printer, printer.GetBest());
+            printer.AddCallback(helper);
+            helper->BnB(solution);
+
+            std::cout << "Task finished: " << ++finished_index << " / " << tasks_total << std::endl << std::endl;
+        });
+    }
+    tasks_total = tasks.size();
+
+    ParallelExecturor executor(std::move(tasks));
+    executor.WaitForJobDone();
 
     std::cout << "Total branches: " << bnbh.GetBranchCount() << std::endl << std::endl;
 
