@@ -299,19 +299,51 @@ struct BnBhelper
     }
 };
 
+void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique)
+{
+    if (graph.get().num_vertices() == 0)
+        return;
+
+    auto color_data = graph.Colorize(Graph::ColorizationType::mindegree_random);
+    auto higher_color = *color_data.rbegin();
+
+    static const auto get_degree = [](const Graph& graph, uint32_t vert) {
+        return graph.get().in_neighbors(vert).size() + graph.get().out_neighbors(vert).size();
+    };
+    auto min_degree_vert = higher_color.second[0];
+    auto min_degree = get_degree(graph, higher_color.second[0]);
+
+    for (auto vert : higher_color.second)
+    {
+        auto degree = get_degree(graph, vert);
+        if (min_degree <= degree)
+            continue;
+
+        min_degree = degree;
+        min_degree_vert = vert;
+    }
+
+    curr_clique.emplace(min_degree_vert);
+    Heuristic(Graph(graph.get().subgraph(graph.get().in_neighbors(min_degree_vert) + graph.get().out_neighbors(min_degree_vert))), curr_clique);
+}
 
 std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
 {
     ModelData model(graph, IloNumVar::Float);
     auto n = graph.get().num_vertices();
 
-    uint64_t best_obj = 8;
-
-    std::set<uint32_t> banned;
-    std::vector<ConstrainsGuard> forever_constr;
+    std::set<uint32_t> curr_clique;
+    Heuristic(graph, curr_clique);
 
     BnBhelper bnbh(model);
     auto initial_solution = bnbh.Solve();
+    for (auto vert : curr_clique)
+    {
+        initial_solution.vars[vert] = 1.0;
+    }
+    initial_solution.max_non_int_index = bnbh.SelectBranch(initial_solution.vars);
+    initial_solution.upper_bound = static_cast<double>(curr_clique.size());
+    initial_solution.int_count = curr_clique.size();
     bnbh.BnB(initial_solution);
     return{};
 
