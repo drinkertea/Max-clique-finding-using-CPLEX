@@ -10,39 +10,5 @@
 
 struct Graph;
 
-struct ModelData;
-
-struct ConstrainsGuard
-{
-    ConstrainsGuard(ModelData& model, uint32_t variable_index, IloNum lowerBound, IloNum upperBound);
-    ~ConstrainsGuard();
-
-private:
-    ModelData& m_model;
-    IloExpr m_expr;
-    IloRange m_constrain;
-    IloExtractable m_constrains;
-};
-
-struct ModelData
-{
-    ModelData(const Graph& graph, IloNumVar::Type type);
-
-    IloCplex        CreateSolver() const;
-    ConstrainsGuard AddScopedConstrains(uint32_t variable_index, IloNum lowerBound, IloNum upperBound = IloInfinity);
-    double          ExtractValue(const IloCplex& cplex, uint32_t variable_index) const;
-    size_t          GetSize() const { return m_size; }
-    const Graph&    GetGraph() const { return m_graph; }
-
-private:
-    friend struct ConstrainsGuard;
-
-    const Graph& m_graph;
-    IloEnv          m_env{};
-    IloModel        m_model;
-    IloNumVarArray  m_variables;
-    size_t          m_size = 0;
-};
-
 std::vector<uint32_t> FindMaxCliqueInteger(const Graph& graph);
 std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph);
