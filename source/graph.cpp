@@ -2,6 +2,7 @@
 #include <fstream>
 #include <algorithm>
 #include <random>
+#include <numeric>
 #include "graph.h"
 
 Graph::Graph(const std::string& path)
@@ -70,21 +71,46 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
     for (const auto& node : m_graph)
         nodes.emplace_back(node);
 
+    static const auto get_degree = [](const auto& node) {
+        return node.get().second.first.size() + node.get().second.second.size();
+    };
+
+    std::vector<uint32_t> random_metric(n, 0);
+    std::iota(random_metric.begin(), random_metric.end(), 0);
+    std::random_device rd;
+    std::mt19937 g(27/*rd()*/);
+    std::shuffle(random_metric.begin(), random_metric.end(), g);
+
     if (type == ColorizationType::maxdegree)
     {
-        std::sort(nodes.begin(), nodes.end(), [](const auto& l, const auto& r) {
-            return l.get().second.first.size() + l.get().second.second.size() > r.get().second.first.size() + r.get().second.second.size();
+        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) {
+            return get_degree(l) > get_degree(r);
         });
     } else if (type == ColorizationType::mindegree)
     {
-        std::sort(nodes.begin(), nodes.end(), [](const auto& l, const auto& r) {
-            return l.get().second.first.size() + l.get().second.second.size() < r.get().second.first.size() + r.get().second.second.size();
+        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) {
+            return  get_degree(l) < get_degree(r);
         });
     } else if (type == ColorizationType::random)
     {
         std::random_device rd;
-        std::mt19937 g(rd());
+        std::mt19937 g(42/*rd()*/);
         std::shuffle(nodes.begin(), nodes.end(), g);
+    } else if(type == ColorizationType::maxdegree_random)
+    {
+        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) -> bool {
+            if (get_degree(l) == get_degree(r))
+                return random_metric[l.get().first] > random_metric[r.get().first];
+            return get_degree(l) > get_degree(r);
+        });
+    }
+    else if (type == ColorizationType::mindegree_random)
+    {
+        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) -> bool {
+            if (get_degree(l) == get_degree(r))
+                return random_metric[l.get().first] > random_metric[r.get().first];
+            return  get_degree(l) < get_degree(r);
+        });
     }
 
     for (const auto& node_wr : nodes)

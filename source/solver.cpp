@@ -74,8 +74,8 @@ ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
     AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::maxdegree);
     AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::mindegree);
     AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::random);
-    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::random);
-    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::random);
+    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::maxdegree_random);
+    AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::mindegree_random);
 
     m_model.add(constrains);
     m_model.add(obj);
@@ -160,55 +160,6 @@ double DiffToInteger(double x)
     return std::abs(std::round(x) - x);
 }
 
-size_t SelectBranch(const std::vector<double>& vars)
-{
-    double max = std::numeric_limits<double>::min();
-    size_t res = -1;
-
-    std::vector<uint32_t> halfs;
-
-    for (size_t i = 0; i < vars.size(); ++i)
-    {
-        auto val = vars[i];
-        if (IsInteger(val))
-            continue;
-
-        if (EpsValue(val) == 0.5)
-        {
-            halfs.emplace_back(i);
-            continue;
-        }
-
-        if (val <= max)
-            continue;
-
-        max = val;
-        res = i;
-    }
-
-    if (res == -1 && !halfs.empty())
-    {
-        return halfs[rand() % halfs.size()];
-    }
-
-    return res;
-}
-
-std::tuple<double, std::vector<double>> Solve(ModelData& model)
-{
-    IloCplex cplex = model.CreateSolver();
-    if (!cplex.solve())
-        return { 0.0, {} };
-
-    std::vector<double> vars(model.GetSize(), 0.0);
-    for (size_t i = 0; i < model.GetSize(); ++i)
-        vars[i] = model.ExtractValue(cplex, i);
-
-    auto result = std::make_tuple(cplex.getObjValue(), std::move(vars));
-    cplex.end();
-    return result;
-}
-
 uint64_t bc = 0;
 
 struct BnBhelper
@@ -219,63 +170,130 @@ struct BnBhelper
 
     uint64_t best_obj = 1;
 
-    void BnB()
+    struct Solution
     {
-        size_t i = 0;
-        bool go_right_first = false;
+        double upper_bound = 0.0;
+        std::vector<double> vars;
+        size_t max_non_int_index = -1;
+        uint64_t int_count = 0;
+    };
+
+    Solution Solve()
+    {
+        Solution res{};
+
+        IloCplex cplex = model.CreateSolver();
+        if (!cplex.solve())
+            return res;
+
+        res.vars.resize(model.GetSize(), 0.0);
+        double max = std::numeric_limits<double>::min();
+        for (size_t i = 0; i < model.GetSize(); ++i)
         {
-            auto [upper_bound, vars] = Solve(model);
-            bc++;
-
-            if (EpsValue(upper_bound) <= static_cast<double>(best_obj))
-                return;
-
-            if (IsInteger(upper_bound))
+            double val = model.ExtractValue(cplex, i);
+            res.vars[i] = val;
+            if (IsInteger(val))
             {
-                uint64_t int_count = 0;
-                for (auto x : vars)
-                    int_count += uint64_t(EpsValue(x) == 1.0);
-                if (int_count >= best_obj)
-                {
-                    best_obj = static_cast<uint64_t>(int_count);
-                    std::cout << "Found " << best_obj << " " << bc << std::endl;
-                    for (uint64_t i = 0; i < vars.size(); ++i)
-                        if (vars[i] > 0.)
-                            std::cout << i << " ";
-                    std::cout << std::endl;
-                    std::cout << std::endl;
-                }
+                res.int_count += uint64_t(EpsValue(val) == 1.0);
+                continue;
             }
 
-            i = SelectBranch(vars);
-            if (i == size_t(-1))
-                return;
+            if (val <= max)
+                continue;
 
-            double var_value = vars[i];
-            go_right_first = var_value - 0.4999999 > 0.0;
-            if (EpsValue(var_value) == 0.5)
-                go_right_first = rand() % 2;
+            max = val;
+            res.max_non_int_index = i;
         }
-        if (go_right_first)
+
+        res.upper_bound = cplex.getObjValue();
+        cplex.end();
+        return res;
+    }
+
+    size_t SelectBranch(const std::vector<double>& vars)
+    {
+        double max = std::numeric_limits<double>::min();
+        size_t res = -1;
+
+        for (size_t i = 0; i < vars.size(); ++i)
+        {
+            auto val = vars[i];
+            if (IsInteger(val))
+                continue;
+
+            if (val <= max)
+                continue;
+
+            max = val;
+            res = i;
+        }
+
+        return res;
+    }
+
+    void BnB(const Solution& solution)
+    {
+        bc++;
+
+        if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj))
+            return;
+
+        if (IsInteger(solution.upper_bound))
+        {
+            if (solution.int_count >= best_obj)
+            {
+                best_obj = static_cast<uint64_t>(solution.int_count);
+                std::cout << "Found " << best_obj << " " << bc << std::endl;
+                for (uint64_t i = 0; i < solution.vars.size(); ++i)
+                    if (solution.vars[i] > 0.999999)
+                        std::cout << i << " ";
+                std::cout << std::endl;
+                std::cout << std::endl;
+            }
+        }
+
+        size_t i = solution.max_non_int_index;
+        if (i == size_t(-1))
+            return;
+
+        Solution right_solution{};
+        {
+            auto guard = model.AddScopedConstrains(i, 1.0, 1.0);
+            right_solution = Solve();
+        }
+        Solution left_solution{};
+        {
+            auto guard = model.AddScopedConstrains(i, 0.0, 0.0);
+            left_solution = Solve();
+        }
+
+        double rdiff = DiffToInteger(right_solution.upper_bound);
+        double ldiff = DiffToInteger(left_solution.upper_bound);
+
+        bool go_right = rdiff < ldiff;
+        if (EpsValue(rdiff) == EpsValue(ldiff))
+            go_right = right_solution.upper_bound > left_solution.upper_bound;
+
+        if (go_right)
         {
             {
                 auto guard = model.AddScopedConstrains(i, 1.0, 1.0);
-                BnB();
+                BnB(right_solution);
             }
             {
                 auto guard = model.AddScopedConstrains(i, 0.0, 0.0);
-                BnB();
+                BnB(left_solution);
             }
         }
         else
         {
             {
                 auto guard = model.AddScopedConstrains(i, 0.0, 0.0);
-                BnB();
+                BnB(left_solution);
             }
             {
                 auto guard = model.AddScopedConstrains(i, 1.0, 1.0);
-                BnB();
+                BnB(right_solution);
             }
         }
     }
@@ -293,7 +311,8 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     std::vector<ConstrainsGuard> forever_constr;
 
     BnBhelper bnbh(model);
-    bnbh.BnB();
+    auto initial_solution = bnbh.Solve();
+    bnbh.BnB(initial_solution);
     return{};
 
 }
