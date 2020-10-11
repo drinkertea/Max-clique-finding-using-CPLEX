@@ -42,7 +42,7 @@ struct ModelData
         AddIndependetConst(Graph::ColorizationType::random);
         AddIndependetConst(Graph::ColorizationType::maxdegree_random);
         AddIndependetConst(Graph::ColorizationType::mindegree_random);
-        InitModel();
+        InitModel(m_sum_vert_less_one);
     }
 
     ModelData(const ModelData& r)
@@ -51,9 +51,9 @@ struct ModelData
         , m_type(r.m_type)
         , m_model(m_env)
         , m_variables(m_env, m_size)
-        , m_sum_vert_less_one(r.m_sum_vert_less_one)
+        //, m_sum_vert_less_one(r.m_sum_vert_less_one)
     {
-        InitModel();
+        InitModel(r.m_sum_vert_less_one);
     }
 
     ~ModelData()
@@ -61,7 +61,7 @@ struct ModelData
         m_env.end();
     }
 
-    void InitModel()
+    void InitModel(const std::set<std::set<uint32_t>>& m_sum_vert_less_one)
     {
         for (uint32_t i = 0; i < m_size; ++i)
         {
@@ -279,15 +279,21 @@ private:
 
 struct BranchingCallback
 {
-    BranchingCallback(size_t md)
+    BranchingCallback(size_t ones_cnt, size_t md)
         : max_depth(md)
+        , ones_cnt(ones_cnt)
     {
     }
 
     DepthGuard OnBranch(const Solution& solution, size_t vertex, double constr)
     {
         curr_path.emplace_back(vertex, constr);
-        if (curr_path.size() > max_depth)
+
+        size_t oc = 0;
+        for (const auto& x : curr_path)
+            oc += size_t(EpsValue(x.second) == 1);
+
+        if (oc > ones_cnt || curr_path.size() > max_depth)
         {
             branches.emplace(curr_path, solution);
             return DepthGuard(curr_path, true);
@@ -303,6 +309,7 @@ struct BranchingCallback
 private:
     std::map<Path, Solution> branches;
     size_t                   max_depth = 0;
+    size_t                   ones_cnt = 0;
     Path                     curr_path;
 };
 
@@ -622,7 +629,7 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     auto n = graph.get().num_vertices();
 
     Printer printer(graph);
-    BranchingCallback first_branching(7);
+    BranchingCallback first_branching(2, 11);
 
     BnBHelper bnbh(model, printer, 1, &first_branching);
     auto initial_solution = bnbh.Solve();
@@ -635,6 +642,7 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     ParallelExecturor::Tasks tasks;
     std::atomic<size_t> finished_index = 0;
     std::atomic<size_t> tasks_total = 0;
+
     for (const auto& first_branches : first_branching.GetBranches())
     {
         const auto& path = first_branches.first;
