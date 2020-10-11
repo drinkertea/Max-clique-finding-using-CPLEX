@@ -29,7 +29,7 @@ struct ModelData
         , m_size(graph.get().num_vertices())
         , m_type(type)
         , m_model(m_env)
-        , m_variables(m_env, graph.get().num_vertices())
+        , m_variables(m_env, m_size)
     {
         AddNonEdgePairs();
         AddNonEdgeTrios();
@@ -39,6 +39,17 @@ struct ModelData
         AddIndependetConst(Graph::ColorizationType::random);
         AddIndependetConst(Graph::ColorizationType::maxdegree_random);
         AddIndependetConst(Graph::ColorizationType::mindegree_random);
+        InitModel();
+    }
+
+    ModelData(const ModelData& r)
+        : m_graph(r.m_graph)
+        , m_size(r.m_size)
+        , m_type(r.m_type)
+        , m_model(m_env)
+        , m_variables(m_env, m_size)
+        , m_sum_vert_less_one(r.m_sum_vert_less_one)
+    {
         InitModel();
     }
 
@@ -89,8 +100,10 @@ struct ModelData
         return cplex.getValue(m_variables[variable_index]);
     }
 
-    size_t          GetSize() const { return m_size; }
-    const Graph& GetGraph() const { return m_graph; }
+    size_t GetSize() const
+    { 
+        return m_size; 
+    }
 
 private:
     void AddIndependetConst(Graph::ColorizationType type)
