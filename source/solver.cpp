@@ -12,7 +12,7 @@
 struct ModelData;
 struct ConstrainsGuard
 {
-    ConstrainsGuard(ModelData& model, uint32_t variable_index, IloNum lowerBound, IloNum upperBound);
+    ConstrainsGuard(ModelData& model, size_t variable_index, IloNum lowerBound, IloNum upperBound);
     ~ConstrainsGuard();
 
 private:
@@ -90,12 +90,12 @@ struct ModelData
         return res;
     }
 
-    ConstrainsGuard AddScopedConstrains(uint32_t variable_index, IloNum lowerBound, IloNum upperBound)
+    ConstrainsGuard AddScopedConstrains(size_t variable_index, IloNum lowerBound, IloNum upperBound)
     {
         return ConstrainsGuard(*this, variable_index, lowerBound, upperBound);
     }
 
-    double ExtractValue(const IloCplex& cplex, uint32_t variable_index) const
+    double ExtractValue(const IloCplex& cplex, size_t variable_index) const
     {
         return cplex.getValue(m_variables[variable_index]);
     }
@@ -117,7 +117,7 @@ private:
 
             m_sum_vert_less_one.emplace(std::set<uint32_t>{
                 independed_nodes.second.begin(),
-                    independed_nodes.second.end()
+                independed_nodes.second.end()
             });
         }
     }
@@ -164,14 +164,14 @@ private:
     std::set<std::set<uint32_t>> m_sum_vert_less_one;
 
     const Graph&    m_graph;
+    size_t          m_size = 0;
+    IloNumVar::Type m_type;
     IloEnv          m_env{};
     IloModel        m_model;
     IloNumVarArray  m_variables;
-    size_t          m_size = 0;
-    IloNumVar::Type m_type;
 };
 
-ConstrainsGuard::ConstrainsGuard(ModelData& model, uint32_t variable_index, IloNum lowerBound, IloNum upperBound)
+ConstrainsGuard::ConstrainsGuard(ModelData& model, size_t variable_index, IloNum lowerBound, IloNum upperBound)
     : m_model(model)
     , m_expr(m_model.m_env)
 {
@@ -233,6 +233,8 @@ double DiffToInteger(double x)
     return std::abs(std::round(x) - x);
 }
 
+constexpr size_t g_invalid_index = std::numeric_limits<size_t>::max();
+
 struct BnBhelper
 {
     ModelData& model;
@@ -246,7 +248,7 @@ struct BnBhelper
     {
         double upper_bound = 0.0;
         std::vector<double> vars;
-        size_t max_non_int_index = -1;
+        size_t max_non_int_index = g_invalid_index;
         uint64_t int_count = 0;
     };
 
@@ -285,7 +287,7 @@ struct BnBhelper
     size_t SelectBranch(const std::vector<double>& vars)
     {
         double max = std::numeric_limits<double>::min();
-        size_t res = -1;
+        size_t res = g_invalid_index;
 
         for (size_t i = 0; i < vars.size(); ++i)
         {
@@ -325,7 +327,7 @@ struct BnBhelper
         }
 
         size_t i = solution.max_non_int_index;
-        if (i == size_t(-1))
+        if (i == g_invalid_index)
             return;
 
         Solution right_solution{};
