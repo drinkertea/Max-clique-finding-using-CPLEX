@@ -13,11 +13,11 @@ int main()
 {
     try
     {
-        Graph g("graphs/C125.9.clq");
+        //Graph g("graphs/C125.9.clq");
         //Graph g("graphs/brock200_2.clq");
         std::vector<uint32_t> brock200_2_test = { 26, 120 ,119 ,157, 69 ,182 ,47 ,148 ,104 ,134 , 54, 144 };
         std::sort(brock200_2_test.begin(), brock200_2_test.end());
-        //Graph g("graphs/keller4.clq");
+        Graph g("graphs/keller4.clq");
         //Graph g("graphs/p_hat300-1.clq");
         //Graph g("graphs/simple.clq");
         //auto result = FindMaxCliqueInteger(g);

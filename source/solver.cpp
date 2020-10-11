@@ -32,7 +32,7 @@ struct ModelData
         , m_variables(m_env, m_size)
     {
         AddNonEdgePairs();
-        AddNonEdgeTrios();
+        //AddNonEdgeTrios();
         AddIndependetConst(Graph::ColorizationType::default);
         AddIndependetConst(Graph::ColorizationType::maxdegree);
         AddIndependetConst(Graph::ColorizationType::mindegree);
@@ -235,27 +235,133 @@ double DiffToInteger(double x)
 
 constexpr size_t g_invalid_index = std::numeric_limits<size_t>::max();
 
-struct BnBhelper
+struct Solution
 {
-    ModelData& model;
+    double upper_bound = 0.0;
+    std::vector<double> vars;
+    size_t max_non_int_index = g_invalid_index;
+    uint64_t int_count = 0;
+};
+
+using Path = std::vector<std::pair<size_t, double>>;
+
+struct DepthGuard
+{
+    bool stop = false;
+
+    DepthGuard(Path& p, bool s)
+        : path(p)
+        , stop(s)
+    {
+    }
+
+    ~DepthGuard()
+    {
+        path.pop_back();
+    }
+
+private:
+    Path& path;
+};
+
+struct BranchingCallback
+{
+    BranchingCallback(size_t md)
+        : max_depth(md)
+    {
+    }
+
+    DepthGuard OnBranch(const Solution& solution, size_t vertex, double constr)
+    {
+        curr_path.emplace_back(vertex, constr);
+        if (curr_path.size() > max_depth)
+        {
+            branches.emplace(curr_path, solution);
+            return DepthGuard(curr_path, true);
+        }
+        return DepthGuard(curr_path, false);
+    }
+
+    const std::map<Path, Solution>& GetBranches()
+    {
+        return branches;
+    }
+
+private:
+    std::map<Path, Solution> branches;
+    size_t                   max_depth = 0;
+    Path                     curr_path;
+};
+
+struct Printer
+{
+    Printer(const Graph& g)
+        : graph(g)
+    {
+    }
+
+    void PrintAndValidate(const Solution& solution, uint64_t bc) const
+    {
+        std::cout << "Found " << solution.int_count << " " << bc << std::endl;
+
+        std::set<uint32_t> clique;
+        for (uint64_t i = 0; i < solution.vars.size(); ++i)
+            if (EpsValue(solution.vars[i]) == 1.0)
+            {
+                std::cout << i << " ";
+                clique.emplace(i);
+            }
+
+        bool valid = true;
+        for (auto v : clique)
+        {
+            auto neights = graph.get().in_neighbors(v) + graph.get().out_neighbors(v);
+            for (auto v1 : clique)
+            {
+                if (v != v1 && !neights.count(v1))
+                    valid = false;
+            }
+        }
+        std::cout << std::endl;
+        std::cout << "Valid " << (valid ? "True" : "False") << std::endl;
+
+        std::cout << std::endl;
+        std::cout << std::endl;
+    }
+
+private:
     const Graph& graph;
+};
 
-    uint64_t bc = 0;
-    BnBhelper(ModelData& m, const Graph& g)
-        : model(m)
-        , graph(g)
-    {
-    };
-
+class BnBHelper
+{
     uint64_t best_obj = 1;
+    uint64_t bc = 0;
 
-    struct Solution
+    ModelData&         model;
+    Printer&           printer;
+    BranchingCallback* branch_callback = nullptr;
+
+    struct BranchingData
     {
-        double upper_bound = 0.0;
-        std::vector<double> vars;
-        size_t max_non_int_index = g_invalid_index;
-        uint64_t int_count = 0;
+        using CRef = std::reference_wrapper<const BranchingData>;
+
+        double way = 0.0;
+        Solution res;
     };
+
+public:
+    BnBHelper(ModelData& m, Printer& p, BranchingCallback* callback = nullptr)
+        : model(m)
+        , printer(p)
+        , branch_callback(callback)
+    {
+    };
+
+    uint64_t GetBranchCount() const
+    {
+        return bc;
+    }
 
     Solution Solve()
     {
@@ -289,7 +395,7 @@ struct BnBhelper
         return res;
     }
 
-    size_t SelectBranch(const std::vector<double>& vars)
+    size_t SelectBranch(const std::vector<double>& vars) const
     {
         double max = std::numeric_limits<double>::min();
         size_t res = g_invalid_index;
@@ -310,68 +416,22 @@ struct BnBhelper
         return res;
     }
 
-    uint32_t max_depth = 0;
-    using Path = std::vector<std::pair<size_t, double>>;
-    std::map<Path, Solution> branches;
-
-    size_t curr_var = g_invalid_index;
-    double curr_way = 0.0;
-    Path curr_path;
-
-    struct DepthGuard
+    void Branching(const Solution& solution, size_t vertex, double constr)
     {
-        Path& path;
-        DepthGuard(Path& p)
-            : path(p)
-        {
-        }
+        auto guard = model.AddScopedConstrains(vertex, constr, constr);
+        BnB(solution);
+    }
 
-        ~DepthGuard()
-        {
-            path.pop_back();
-        }
-    };
-
-    void PrintAndValidate(const Solution& solution)
+    void Branching(BranchingCallback& callback, const Solution& solution, size_t vertex, double constr)
     {
-        std::cout << "Found " << best_obj << " " << bc << std::endl;
-
-        std::set<uint32_t> clique;
-        for (uint64_t i = 0; i < solution.vars.size(); ++i)
-            if (EpsValue(solution.vars[i]) == 1.0)
-            {
-                std::cout << i << " ";
-                clique.emplace(i);
-            }
-
-        bool valid = true;
-        for (auto v : clique)
-        {
-            auto neights = graph.get().in_neighbors(v) + graph.get().out_neighbors(v);
-            for (auto v1 : clique)
-            {
-                if (v != v1 && !neights.count(v1))
-                    valid = false;
-            }
-        }
-        std::cout << std::endl;
-        std::cout << "Valid " << (valid ? "True" : "False") << std::endl;
-
-        std::cout << std::endl;
-        std::cout << std::endl;
+        auto guard = callback.OnBranch(solution, vertex, constr);
+        if (guard.stop)
+            return;
+        Branching(solution, vertex, constr);
     }
 
     void BnB(const Solution& solution)
     {
-        //if (curr_var != g_invalid_index)
-        //    curr_path.emplace_back(curr_var, curr_way);
-        //DepthGuard dg(curr_path);
-        //if (curr_path.size() > max_depth)
-        //{
-        //    branches.emplace(curr_path, solution);
-        //    return;
-        //}
-
         bc++;
 
         if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj))
@@ -382,7 +442,7 @@ struct BnBhelper
             if (solution.int_count >= best_obj)
             {
                 best_obj = static_cast<uint64_t>(solution.int_count);
-                PrintAndValidate(solution);
+                printer.PrintAndValidate(solution, bc);
             }
         }
 
@@ -390,38 +450,37 @@ struct BnBhelper
         if (i == g_invalid_index)
             return;
 
-        Solution right_solution{};
+
+        BranchingData right{ 1.0 };
         {
-            auto guard = model.AddScopedConstrains(i, 1.0, 1.0);
-            right_solution = Solve();
-        }
-        Solution left_solution{};
-        {
-            auto guard = model.AddScopedConstrains(i, 0.0, 0.0);
-            left_solution = Solve();
+            auto guard = model.AddScopedConstrains(i, right.way, right.way);
+            right.res = Solve();
         }
 
-        double rdiff = DiffToInteger(right_solution.upper_bound);
-        double ldiff = DiffToInteger(left_solution.upper_bound);
-
-        bool go_right = right_solution.int_count > left_solution.int_count;
-        if (right_solution.int_count == left_solution.int_count)
-            go_right = right_solution.upper_bound > left_solution.upper_bound;
-
-        double first_way = 0.0;
-        double second_way = 1.0;
-        if (go_right)
-            std::swap(first_way, second_way);
-
+        BranchingData left{ 0.0 };
         {
-            auto guard = model.AddScopedConstrains(i, first_way, first_way);
-            curr_way = first_way;
-            BnB(right_solution);
+            auto guard = model.AddScopedConstrains(i, left.way, left.way);
+            left.res = Solve();
         }
+
+        bool go_right = right.res.int_count > left.res.int_count;
+        if (right.res.int_count == left.res.int_count)
+            go_right = right.res.upper_bound > left.res.upper_bound;
+
+        BranchingData::CRef right_ref = right;
+        BranchingData::CRef left_ref = left;
+        if (!go_right)
+            std::swap(right_ref, left_ref);
+
+        if (branch_callback)
         {
-            auto guard = model.AddScopedConstrains(i, second_way, second_way);
-            curr_way = second_way;
-            BnB(left_solution);
+            Branching(*branch_callback, right_ref.get().res, i, right_ref.get().way);
+            Branching(*branch_callback, left_ref.get().res, i, left_ref.get().way);
+        }
+        else
+        {
+            Branching(right_ref.get().res, i, right_ref.get().way);
+            Branching(left_ref.get().res, i, left_ref.get().way);
         }
     }
 };
@@ -454,30 +513,35 @@ void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique)
     Heuristic(Graph(graph.get().subgraph(graph.get().in_neighbors(min_degree_vert) + graph.get().out_neighbors(min_degree_vert))), curr_clique);
 }
 
+void AddHeuristicSolution(const BnBHelper& helper, const Graph& graph, Solution& initial_solution)
+{
+    std::set<uint32_t> curr_clique;
+    Heuristic(graph, curr_clique);
+    for (auto vert : curr_clique)
+        initial_solution.vars[vert] = 1.0;
+
+    initial_solution.max_non_int_index = helper.SelectBranch(initial_solution.vars);
+    initial_solution.upper_bound = static_cast<double>(curr_clique.size());
+    initial_solution.int_count = curr_clique.size();
+}
+
 std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
 {
     ModelData model(graph, IloNumVar::Float);
     auto n = graph.get().num_vertices();
 
-    std::set<uint32_t> curr_clique;
-    Heuristic(graph, curr_clique);
+    Printer printer(graph);
+    BranchingCallback first_branching(5);
 
-    BnBhelper bnbh(model, graph);
+    BnBHelper bnbh(model, printer/*, &first_branching*/);
     auto initial_solution = bnbh.Solve();
     std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl << std::endl;
 
-    for (auto vert : curr_clique)
-    {
-        initial_solution.vars[vert] = 1.0;
-    }
-    initial_solution.max_non_int_index = bnbh.SelectBranch(initial_solution.vars);
-    initial_solution.upper_bound = static_cast<double>(curr_clique.size());
-    initial_solution.int_count = curr_clique.size();
+    AddHeuristicSolution(bnbh, graph, initial_solution);
 
-    bnbh.max_depth = 5;
     bnbh.BnB(initial_solution);
 
-    std::cout << "Total branches: " << bnbh.bc << std::endl << std::endl;
+    std::cout << "Total branches: " << bnbh.GetBranchCount() << std::endl << std::endl;
 
     return{};
 
