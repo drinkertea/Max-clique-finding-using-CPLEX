@@ -77,8 +77,8 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
 
     std::vector<uint32_t> random_metric(n, 0);
     std::iota(random_metric.begin(), random_metric.end(), 0);
-    std::random_device rd;
-    std::mt19937 g(27/*rd()*/);
+    static uint64_t seed = 42;
+    std::mt19937 g(seed++);
     std::shuffle(random_metric.begin(), random_metric.end(), g);
 
     if (type == ColorizationType::maxdegree)
@@ -93,8 +93,6 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
         });
     } else if (type == ColorizationType::random)
     {
-        std::random_device rd;
-        std::mt19937 g(42/*rd()*/);
         std::shuffle(nodes.begin(), nodes.end(), g);
     } else if(type == ColorizationType::maxdegree_random)
     {

@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <map>
 #include <set>
+#include <array>
 
 void AddIndependetConst(const Graph& graph, const IloNumVarArray& m_variables, IloEnv& m_env, IloModel& m_model, Graph::ColorizationType type)
 {
@@ -50,6 +51,27 @@ ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
         }
     }
 
+    std::vector<std::array<uint32_t, 3>> non_edge_trios;
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        for (uint32_t j = i + 1; j < n; ++j)
+        {
+            for (uint32_t k = j + 1; k < n; ++k)
+            {
+                if (graph.get().out_neighbors(i).count(j))
+                    continue;
+
+                if (graph.get().out_neighbors(i).count(k))
+                    continue;
+
+                if (graph.get().out_neighbors(j).count(k))
+                    continue;
+
+                non_edge_trios.push_back({ i, j, k });
+            }
+        }
+    }
+
     // if y[i] and y[j] has not edge - y[i] + y[j] <= 1
     IloRangeArray constrains(m_env, non_edge_pairs.size());
 
@@ -61,6 +83,18 @@ ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
         expr += m_variables[j];
         std::string name = "constr[" + std::to_string(i) + "][" + std::to_string(j) + "]";
         constrains[k++] = IloRange(m_env, 0, expr, 1, name.c_str());
+    }
+
+    k = 0u;
+    IloRangeArray constrains3(m_env, non_edge_trios.size());
+    for (auto [i, j, d] : non_edge_trios)
+    {
+        IloExpr expr(m_env);
+        expr += m_variables[i];
+        expr += m_variables[j];
+        expr += m_variables[d];
+        std::string name = "constr[" + std::to_string(i) + "][" + std::to_string(j) + "]";
+        constrains3[k++] = IloRange(m_env, 0, expr, 1, name.c_str());
     }
 
     IloExpr obj_expr(m_env);
@@ -78,6 +112,7 @@ ModelData::ModelData(const Graph& graph, IloNumVar::Type type)
     AddIndependetConst(graph, m_variables, m_env, m_model, Graph::ColorizationType::mindegree_random);
 
     m_model.add(constrains);
+    m_model.add(constrains3);
     m_model.add(obj);
 }
 
@@ -160,12 +195,12 @@ double DiffToInteger(double x)
     return std::abs(std::round(x) - x);
 }
 
-uint64_t bc = 0;
 
 struct BnBhelper
 {
     ModelData& model;
 
+    uint64_t bc = 0;
     BnBhelper(ModelData& m) : model(m) {};
 
     uint64_t best_obj = 1;
@@ -337,6 +372,8 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
 
     BnBhelper bnbh(model);
     auto initial_solution = bnbh.Solve();
+    std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl << std::endl;
+
     for (auto vert : curr_clique)
     {
         initial_solution.vars[vert] = 1.0;
@@ -345,6 +382,9 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     initial_solution.upper_bound = static_cast<double>(curr_clique.size());
     initial_solution.int_count = curr_clique.size();
     bnbh.BnB(initial_solution);
+
+    std::cout << "Total branches: " << bnbh.bc << std::endl << std::endl;
+
     return{};
 
 }
