@@ -288,26 +288,24 @@ struct BranchingCallback
     DepthGuard OnBranch(const Solution& solution, size_t vertex, double constr)
     {
         curr_path.emplace_back(vertex, constr);
-
-        size_t oc = 0;
-        for (const auto& x : curr_path)
-            oc += size_t(EpsValue(x.second) == 1);
-
-        if (oc > ones_cnt || curr_path.size() > max_depth)
+        if (solution.int_count >= ones_cnt || curr_path.size() >= max_depth)
         {
-            branches.emplace(curr_path, solution);
+            //if (solution.int_count == 0)
+                //branches.emplace_front(curr_path, solution);
+            //else
+                branches.emplace_back(curr_path, solution);
             return DepthGuard(curr_path, true);
         }
         return DepthGuard(curr_path, false);
     }
 
-    const std::map<Path, Solution>& GetBranches()
+    const std::deque<std::pair<Path, Solution>>& GetBranches()
     {
         return branches;
     }
 
 private:
-    std::map<Path, Solution> branches;
+    std::deque<std::pair<Path, Solution>> branches;
     size_t                   max_depth = 0;
     size_t                   ones_cnt = 0;
     Path                     curr_path;
@@ -335,10 +333,17 @@ struct Printer
 
     void PrintAndValidate(const Solution& solution, uint64_t bc);
 
+    void Print(const std::string& str)
+    {
+        std::lock_guard<std::mutex> lg(print_mutex);
+        std::cout << str << std::endl;
+    }
+
 private:
     uint64_t best_obj = 0;
     std::vector<std::weak_ptr<BnBHelper>> best_upd_callbacks;
     std::mutex print_mutex;
+    std::mutex callback_mutex;
     const Graph& graph;
 };
 
@@ -388,7 +393,7 @@ public:
             return res;
 
         res.vars.resize(model.GetSize(), 0.0);
-        double max = std::numeric_limits<double>::min();
+        double min = std::numeric_limits<double>::max();
         for (size_t i = 0; i < model.GetSize(); ++i)
         {
             double val = model.ExtractValue(cplex, i);
@@ -399,10 +404,10 @@ public:
                 continue;
             }
 
-            if (val <= max)
+            if (val >= min)
                 continue;
 
-            max = val;
+            min = val;
             res.max_non_int_index = i;
         }
 
@@ -413,7 +418,7 @@ public:
 
     size_t SelectBranch(const std::vector<double>& vars) const
     {
-        double max = std::numeric_limits<double>::min();
+        double min = std::numeric_limits<double>::max();
         size_t res = g_invalid_index;
 
         for (size_t i = 0; i < vars.size(); ++i)
@@ -422,10 +427,10 @@ public:
             if (IsInteger(val))
                 continue;
 
-            if (val <= max)
+            if (val >= min)
                 continue;
 
-            max = val;
+            min = val;
             res = i;
         }
 
@@ -502,20 +507,23 @@ public:
 
 void Printer::PrintAndValidate(const Solution& solution, uint64_t bc)
 {
-    std::lock_guard<std::mutex> lg(print_mutex);
-    if (solution.int_count > best_obj)
     {
-        best_obj = solution.int_count;
-        for (auto& callback : best_upd_callbacks)
+        std::lock_guard<std::mutex> lg(callback_mutex);
+        if (solution.int_count > best_obj)
         {
-            auto catch_obj = callback.lock();
-            if (!catch_obj)
-                continue;
+            best_obj = solution.int_count;
+            for (auto& callback : best_upd_callbacks)
+            {
+                auto catch_obj = callback.lock();
+                if (!catch_obj)
+                    continue;
 
-            catch_obj->NewBestObj(best_obj);
+                catch_obj->NewBestObj(best_obj);
+            }
         }
     }
 
+    std::lock_guard<std::mutex> lg(print_mutex);
     std::cout << "Found " << solution.int_count << " " << bc << std::endl;
 
     std::set<uint32_t> clique;
@@ -629,7 +637,7 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     auto n = graph.get().num_vertices();
 
     Printer printer(graph);
-    BranchingCallback first_branching(2, 11);
+    BranchingCallback first_branching(1, n);
 
     BnBHelper bnbh(model, printer, 1, &first_branching);
     auto initial_solution = bnbh.Solve();
@@ -658,7 +666,12 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
             printer.AddCallback(helper);
             helper->BnB(solution);
 
-            std::cout << "Task finished: " << ++finished_index << " / " << tasks_total << std::endl << std::endl;
+            std::stringstream ss;
+            ss << "Task finished: " << ++finished_index << " / " << tasks_total << "Path";
+            for (const auto& branch : path)
+                ss << " " << branch.second;
+            ss << std::endl;
+            printer.Print(ss.str());
         });
     }
     tasks_total = tasks.size();
