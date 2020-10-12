@@ -291,29 +291,21 @@ private:
 
 class BnBHelper;
 
-struct Printer
+struct ThreadsAccumulator
 {
-    Printer(const Graph& g)
+    ThreadsAccumulator(const Graph& g)
         : graph(g)
     {
     }
 
-    void AddCallback(const std::shared_ptr<BnBHelper>& callback)
-    {
-        std::lock_guard<std::mutex> lg(callback_mutex);
-        best_upd_callbacks.emplace_back(callback);
-    }
-
-    uint64_t GetBest() const
-    {
-        return best_obj_value;
-    }
-
     void OnBestSolution(const Solution& solution)
     {
-        NotifyAll(solution);
-
         auto clique = ExtractClique(solution.variables);
+        {
+            std::lock_guard<std::mutex> lg(solutions_mutex);
+            solutions.emplace_back(solution);
+        }
+
         std::stringstream ss;
         ss << "Found " << solution.integer_count << " " << std::endl;
 
@@ -344,21 +336,31 @@ struct Printer
         Print(ss.str());
     }
 
-    void NotifyAll(const Solution& solution);
-
     void Print(const std::string& str)
     {
         std::lock_guard<std::mutex> lg(print_mutex);
         std::cout << str << std::endl;
     }
 
-private:
-    std::mutex callback_mutex;
-    uint64_t   best_obj_value = 0;
-    std::vector<std::weak_ptr<BnBHelper>> best_upd_callbacks;
+    Solution GetBestSolution() const
+    {
+        Solution best{};
+        for (const auto& solution : solutions)
+        {
+            if (solution.integer_count <= best.integer_count)
+                continue;
 
+            best = solution;
+        }
+        return best;
+    }
+
+private:
     std::atomic<size_t> finished_index = 0;
     std::atomic<size_t> tasks_total = 0;
+
+    std::vector<Solution> solutions;
+    std::mutex            solutions_mutex;
 
     std::mutex print_mutex;
     const Graph& graph;
@@ -366,12 +368,10 @@ private:
 
 class BnBHelper
 {
-    uint64_t best_obj_value = 1;
-    uint64_t branches_count = 0;
-    Solution best_solution{};
-
+    std::atomic<uint64_t>& best_obj_value;
+    uint64_t               branches_count = 0;
     ModelData&             model;
-    Printer&               printer;
+    ThreadsAccumulator&    accumulator;
     BranchingStateTracker* branching_state_tracker = nullptr;
 
     struct BranchingData
@@ -469,9 +469,9 @@ class BnBHelper
     }
 
 public:
-    BnBHelper(ModelData& m, Printer& p, uint64_t best, BranchingStateTracker* callback = nullptr)
+    BnBHelper(ModelData& m, ThreadsAccumulator& p, std::atomic<uint64_t>& best, BranchingStateTracker* callback = nullptr)
         : model(m)
-        , printer(p)
+        , accumulator(p)
         , branching_state_tracker(callback)
         , best_obj_value(best)
     {
@@ -480,16 +480,6 @@ public:
     uint64_t GetBranchCount() const
     {
         return branches_count;
-    }
-
-    const Solution& GetBestSolution() const
-    {
-        return best_solution;
-    }
-
-    void OnNewBestObjValue(uint64_t newval)
-    {
-        best_obj_value = std::max(newval, best_obj_value);
     }
 
     void BnB(const Solution& solution)
@@ -502,8 +492,7 @@ public:
         if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
         {
             best_obj_value = static_cast<uint64_t>(solution.integer_count);
-            best_solution = solution;
-            printer.OnBestSolution(solution);
+            accumulator.OnBestSolution(solution);
         }
 
         size_t branch_index = solution.branching_index;
@@ -529,23 +518,6 @@ public:
         BnB(initial_solution);
     }
 };
-
-void Printer::NotifyAll(const Solution& solution)
-{
-    std::lock_guard<std::mutex> lg(callback_mutex);
-    if (solution.integer_count > best_obj_value)
-    {
-        best_obj_value = solution.integer_count;
-        for (auto& callback : best_upd_callbacks)
-        {
-            auto catch_obj = callback.lock();
-            if (!catch_obj)
-                continue;
-
-            catch_obj->OnNewBestObjValue(best_obj_value);
-        }
-    }
-}
 
 struct ParallelExecturor
 {
@@ -622,56 +594,40 @@ std::set<uint32_t> Heuristic(const Graph& graph)
 std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
 {
     ModelData             model(graph, IloNumVar::Float);
-    Printer               printer(graph);
+    ThreadsAccumulator    accumulator(graph);
     BranchingStateTracker branching_state_tracker(1, graph.GetSize());
 
-    BnBHelper bnb_helper(model, printer, 1, &branching_state_tracker);
+    std::atomic<uint64_t> best_obj_value = 1;
+    BnBHelper bnb_helper(model, accumulator, best_obj_value, &branching_state_tracker);
     bnb_helper.BnB(Heuristic(graph));
 
     ParallelExecturor::Tasks tasks;
-    std::vector<Solution>    solutions = { bnb_helper.GetBestSolution() };
-    std::mutex               solutions_mutex;
-    uint64_t                 total_branches = bnb_helper.GetBranchCount();
-
+    std::atomic<uint64_t>    total_branches = bnb_helper.GetBranchCount();
     for (const auto& first_branches : branching_state_tracker.GetBranches())
     {
         const auto& path = first_branches.first;
         const auto& solution = first_branches.second;
-        tasks.push_back([path, solution, &model, &printer, &solutions, &solutions_mutex, &total_branches]() {
+        tasks.push_back([path, solution, &model, &accumulator, &total_branches, &best_obj_value]() {
             ModelData copy_model(model);
 
             std::vector<std::unique_ptr<ConstrainsGuard>> path_constr;
             for (const auto& branch : path)
                 path_constr.push_back(copy_model.AddScopedConstrainsPtr(branch.first, branch.second, branch.second));
 
-            auto helper = std::make_shared<BnBHelper>(copy_model, printer, printer.GetBest());
-            printer.AddCallback(helper);
-
+            auto helper = std::make_shared<BnBHelper>(copy_model, accumulator, best_obj_value);
             helper->BnB(solution);
 
-            printer.OnTaskComplete(path);
-
-            std::lock_guard<std::mutex> lg(solutions_mutex);
-            solutions.emplace_back(helper->GetBestSolution());
+            accumulator.OnTaskComplete(path);
             total_branches += helper->GetBranchCount();
         });
     }
-    printer.ProgressBegin(tasks.size());
+    accumulator.ProgressBegin(tasks.size());
 
     ParallelExecturor executor(std::move(tasks));
     executor.WaitForJobDone();
 
-    Solution best{};
-    for (const auto& solution : solutions)
-    {
-        if (solution.integer_count <= best.integer_count)
-            continue;
-
-        best = solution;
-    }
-
     std::cout << "Total branches: " << total_branches << std::endl << std::endl;
 
-    auto max_clique = ExtractClique(best.variables);
+    auto max_clique = ExtractClique(accumulator.GetBestSolution().variables);
     return { max_clique.begin(), max_clique.end() };
 }
