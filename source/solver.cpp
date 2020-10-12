@@ -512,6 +512,13 @@ public:
             initial_solution.variables[vert] = 1.0;
 
         initial_solution.branching_index = SelectBranch(initial_solution.variables);
+
+        auto size = initial_solution.variables.size();
+        initial_solution.variables.clear();
+        initial_solution.variables.resize(size, 0.0);
+        for (auto vert : heuristic_clique)
+            initial_solution.variables[vert] = 1.0;
+
         initial_solution.upper_bound     = static_cast<double>(heuristic_clique.size());
         initial_solution.integer_count   = static_cast<uint64_t>(heuristic_clique.size());
 
