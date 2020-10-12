@@ -12,6 +12,61 @@
 #include <mutex>
 #include <atomic>
 
+constexpr size_t g_invalid_index = std::numeric_limits<size_t>::max();
+
+double EpsValue(double x)
+{
+    constexpr double eps = 1e8;
+    return std::round(x * eps) / eps;
+}
+
+bool IsInteger(double x)
+{
+    return EpsValue(x) == std::round(x);
+}
+
+double DiffToInteger(double x)
+{
+    return std::abs(std::round(x) - x);
+}
+
+std::set<uint32_t> ExtractClique(const std::vector<double>& variables)
+{
+    std::set<uint32_t> clique;
+    for (uint64_t i = 0; i < variables.size(); ++i)
+        if (EpsValue(variables[i]) == 1.0)
+            clique.emplace(i);
+    return clique;
+}
+
+struct Solution
+{
+    double              upper_bound = 0.0;
+    std::vector<double> variables;
+    size_t              branching_index = g_invalid_index;
+    uint64_t            integer_count = 0;
+};
+
+using Path = std::vector<std::pair<size_t, double>>;
+struct DepthGuard
+{
+    bool stop = false;
+
+    DepthGuard(Path& p, bool s)
+        : path(p)
+        , stop(s)
+    {
+    }
+
+    ~DepthGuard()
+    {
+        path.pop_back();
+    }
+
+private:
+    Path& path;
+};
+
 struct ModelData;
 struct ConstrainsGuard
 {
@@ -29,13 +84,12 @@ struct ModelData
 {
     ModelData(const Graph& graph, IloNumVar::Type type)
         : m_graph(graph)
-        , m_size(graph.get().num_vertices())
+        , m_size(graph.GetSize())
         , m_type(type)
         , m_model(m_env)
         , m_variables(m_env, m_size)
     {
         AddNonEdgePairs();
-        //AddNonEdgeTrios();
         AddIndependetConst(Graph::ColorizationType::default);
         AddIndependetConst(Graph::ColorizationType::maxdegree);
         AddIndependetConst(Graph::ColorizationType::mindegree);
@@ -51,7 +105,6 @@ struct ModelData
         , m_type(r.m_type)
         , m_model(m_env)
         , m_variables(m_env, m_size)
-        //, m_sum_vert_less_one(r.m_sum_vert_less_one)
     {
         InitModel(r.m_sum_vert_less_one);
     }
@@ -82,9 +135,7 @@ struct ModelData
 
         IloExpr obj_expr(m_env);
         for (uint32_t i = 0; i < m_size; ++i)
-        {
             obj_expr += m_variables[i];
-        }
         IloObjective obj(m_env, obj_expr, IloObjective::Maximize);
 
         m_model.add(constrains);
@@ -141,33 +192,10 @@ private:
         {
             for (uint32_t j = i + 1; j < m_size; ++j)
             {
-                if (m_graph.get().out_neighbors(i).count(j))
+                if (m_graph.HasEdge(i, j))
                     continue;
 
                 m_sum_vert_less_one.emplace(std::set<uint32_t>{ i, j });
-            }
-        }
-    }
-
-    void AddNonEdgeTrios()
-    {
-        for (uint32_t i = 0; i < m_size; ++i)
-        {
-            for (uint32_t j = i + 1; j < m_size; ++j)
-            {
-                for (uint32_t k = j + 1; k < m_size; ++k)
-                {
-                    if (m_graph.get().out_neighbors(i).count(j))
-                        continue;
-
-                    if (m_graph.get().out_neighbors(i).count(k))
-                        continue;
-
-                    if (m_graph.get().out_neighbors(j).count(k))
-                        continue;
-
-                    m_sum_vert_less_one.emplace(std::set<uint32_t>{ i, j, k });
-                }
             }
         }
     }
@@ -212,7 +240,7 @@ std::vector<uint32_t> FindMaxCliqueInteger(const Graph& graph)
     std::vector<uint32_t> res;
     std::vector<double> vars;
 
-    auto n = graph.get().num_vertices();
+    auto n = graph.GetSize();
     auto obj_val = cplex.getObjValue();
     if (solved) {
         for (uint32_t i = 0; i < n; ++i)
@@ -230,56 +258,9 @@ std::vector<uint32_t> FindMaxCliqueInteger(const Graph& graph)
     return res;
 }
 
-double EpsValue(double x)
+struct BranchingStateTracker
 {
-    constexpr double eps = 1e8;
-    return std::round(x * eps) / eps;
-}
-
-bool IsInteger(double x)
-{
-    return EpsValue(x) == std::round(x);
-}
-
-double DiffToInteger(double x)
-{
-    return std::abs(std::round(x) - x);
-}
-
-constexpr size_t g_invalid_index = std::numeric_limits<size_t>::max();
-
-struct Solution
-{
-    double upper_bound = 0.0;
-    std::vector<double> vars;
-    size_t max_non_int_index = g_invalid_index;
-    uint64_t int_count = 0;
-};
-
-using Path = std::vector<std::pair<size_t, double>>;
-
-struct DepthGuard
-{
-    bool stop = false;
-
-    DepthGuard(Path& p, bool s)
-        : path(p)
-        , stop(s)
-    {
-    }
-
-    ~DepthGuard()
-    {
-        path.pop_back();
-    }
-
-private:
-    Path& path;
-};
-
-struct BranchingCallback
-{
-    BranchingCallback(size_t ones_cnt, size_t md)
+    BranchingStateTracker(size_t ones_cnt, size_t md)
         : max_depth(md)
         , ones_cnt(ones_cnt)
     {
@@ -288,12 +269,9 @@ struct BranchingCallback
     DepthGuard OnBranch(const Solution& solution, size_t vertex, double constr)
     {
         curr_path.emplace_back(vertex, constr);
-        if (solution.int_count >= ones_cnt || curr_path.size() >= max_depth)
+        if (solution.integer_count >= ones_cnt || curr_path.size() >= max_depth)
         {
-            //if (solution.int_count == 0)
-                //branches.emplace_front(curr_path, solution);
-            //else
-                branches.emplace_back(curr_path, solution);
+            branches.emplace_back(curr_path, solution);
             return DepthGuard(curr_path, true);
         }
         return DepthGuard(curr_path, false);
@@ -322,16 +300,35 @@ struct Printer
 
     void AddCallback(const std::shared_ptr<BnBHelper>& callback)
     {
-        std::lock_guard<std::mutex> lg(print_mutex);
+        std::lock_guard<std::mutex> lg(callback_mutex);
         best_upd_callbacks.emplace_back(callback);
     }
 
     uint64_t GetBest() const
     {
-        return best_obj;
+        return best_obj_value;
     }
 
-    void PrintAndValidate(const Solution& solution, uint64_t bc);
+
+    void OnBestSolution(const Solution& solution)
+    {
+        NotifyAll(solution);
+
+        auto clique = ExtractClique(solution.variables);
+        std::lock_guard<std::mutex> lg(print_mutex);
+        std::cout << "Found " << solution.integer_count << " " << std::endl;
+
+        for (auto v : clique)
+            std::cout << v << " ";
+
+        std::cout << std::endl;
+        std::cout << "Valid " << (graph.IsClique(clique) ? "True" : "False") << std::endl;
+
+        std::cout << std::endl;
+        std::cout << std::endl;
+    }
+
+    void NotifyAll(const Solution& solution);
 
     void Print(const std::string& str)
     {
@@ -340,80 +337,91 @@ struct Printer
     }
 
 private:
-    uint64_t best_obj = 0;
-    std::vector<std::weak_ptr<BnBHelper>> best_upd_callbacks;
-    std::mutex print_mutex;
     std::mutex callback_mutex;
+    uint64_t   best_obj_value = 0;
+    std::vector<std::weak_ptr<BnBHelper>> best_upd_callbacks;
+
+    std::mutex print_mutex;
     const Graph& graph;
 };
 
 class BnBHelper
 {
-    uint64_t best_obj = 1;
-    uint64_t bc = 0;
+    uint64_t best_obj_value = 1;
+    uint64_t branches_count = 0;
 
-    ModelData&         model;
-    Printer&           printer;
-    BranchingCallback* branch_callback = nullptr;
+    ModelData&             model;
+    Printer&               printer;
+    BranchingStateTracker* branching_state_tracker = nullptr;
 
     struct BranchingData
     {
         using CRef = std::reference_wrapper<const BranchingData>;
-
         double way = 0.0;
         Solution res;
     };
+    using Branches = std::pair<BranchingData, BranchingData>;
+
+    void Branching(const BranchingData& way, size_t vertex)
+    {
+        auto guard = model.AddScopedConstrains(vertex, way.way, way.way);
+        BnB(way.res);
+    }
+
+    void Branching(BranchingStateTracker& callback, const BranchingData& way, size_t vertex)
+    {
+        auto guard = callback.OnBranch(way.res, vertex, way.way);
+        if (guard.stop)
+            return;
+        Branching(way, vertex);
+    }
+
+    void Branching(BranchingStateTracker* callback, const BranchingData& way, size_t vertex)
+    {
+        if (callback)
+            return Branching(*callback, way, vertex);
+        Branching(way, vertex);
+    }
+
+    Branches GetWays(size_t branch_index)
+    {
+        Branches ways = { { 1.0 }, { 0.0 } };
+        {
+            auto guard = model.AddScopedConstrains(branch_index, ways.first.way, ways.first.way);
+            ways.first.res = Solve();
+        }
+        {
+            auto guard = model.AddScopedConstrains(branch_index, ways.second.way, ways.second.way);
+            ways.second.res = Solve();
+        }
+
+        bool go_right = ways.first.res.integer_count > ways.second.res.integer_count;
+        if (ways.first.res.integer_count == ways.second.res.integer_count)
+            go_right = ways.first.res.upper_bound > ways.second.res.upper_bound;
+
+        if (!go_right)
+            std::swap(ways.first, ways.second);
+
+        return ways;
+    }
 
 public:
-    BnBHelper(ModelData& m, Printer& p, uint64_t best, BranchingCallback* callback = nullptr)
+    BnBHelper(ModelData& m, Printer& p, uint64_t best, BranchingStateTracker* callback = nullptr)
         : model(m)
         , printer(p)
-        , branch_callback(callback)
-        , best_obj(best)
+        , branching_state_tracker(callback)
+        , best_obj_value(best)
     {
     };
 
     uint64_t GetBranchCount() const
     {
-        return bc;
+        return branches_count;
     }
 
-    void NewBestObj(uint64_t newval)
+    void OnNewBestObjValue(uint64_t newval)
     {
-        best_obj = std::max(newval, best_obj);
-    }
-
-    Solution Solve()
-    {
-        Solution res{};
-
-        IloCplex cplex = model.CreateSolver();
-        cplex.setParam(IloCplex::Param::Threads, 1);
-        if (!cplex.solve())
-            return res;
-
-        res.vars.resize(model.GetSize(), 0.0);
-        double min = std::numeric_limits<double>::max();
-        for (size_t i = 0; i < model.GetSize(); ++i)
-        {
-            double val = model.ExtractValue(cplex, i);
-            res.vars[i] = val;
-            if (IsInteger(val))
-            {
-                res.int_count += uint64_t(EpsValue(val) == 1.0);
-                continue;
-            }
-
-            if (val >= min)
-                continue;
-
-            min = val;
-            res.max_non_int_index = i;
-        }
-
-        res.upper_bound = cplex.getObjValue();
-        cplex.end();
-        return res;
+        best_obj_value = std::max(newval, best_obj_value);
     }
 
     size_t SelectBranch(const std::vector<double>& vars) const
@@ -437,119 +445,69 @@ public:
         return res;
     }
 
-    void Branching(const Solution& solution, size_t vertex, double constr)
+    Solution Solve()
     {
-        auto guard = model.AddScopedConstrains(vertex, constr, constr);
-        BnB(solution);
+        Solution res{};
+
+        IloCplex cplex = model.CreateSolver();
+        cplex.setParam(IloCplex::Param::Threads, 1);
+        if (!cplex.solve())
+            return res;
+
+        res.variables.resize(model.GetSize(), 0.0);
+        for (size_t i = 0; i < model.GetSize(); ++i)
+        {
+            res.variables[i] = model.ExtractValue(cplex, i);
+            res.integer_count += uint64_t(EpsValue(res.variables[i]) == 1.0);
+        }
+
+        res.branching_index = SelectBranch(res.variables);
+        res.upper_bound = cplex.getObjValue();
+        cplex.end();
+        return res;
     }
 
-    void Branching(BranchingCallback& callback, const Solution& solution, size_t vertex, double constr)
-    {
-        auto guard = callback.OnBranch(solution, vertex, constr);
-        if (guard.stop)
-            return;
-        Branching(solution, vertex, constr);
-    }
 
     void BnB(const Solution& solution)
     {
-        bc++;
+        ++branches_count;
 
-        if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj))
+        if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj_value))
             return;
 
-        if (IsInteger(solution.upper_bound))
+        if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
         {
-            if (solution.int_count >= best_obj)
-            {
-                best_obj = static_cast<uint64_t>(solution.int_count);
-                printer.PrintAndValidate(solution, bc);
-            }
+            best_obj_value = static_cast<uint64_t>(solution.integer_count);
+            printer.OnBestSolution(solution);
         }
 
-        size_t i = solution.max_non_int_index;
-        if (i == g_invalid_index)
+        size_t branch_index = solution.branching_index;
+        if (branch_index == g_invalid_index)
             return;
 
-        BranchingData right{ 1.0 };
-        {
-            auto guard = model.AddScopedConstrains(i, right.way, right.way);
-            right.res = Solve();
-        }
-
-        BranchingData left{ 0.0 };
-        {
-            auto guard = model.AddScopedConstrains(i, left.way, left.way);
-            left.res = Solve();
-        }
-
-        bool go_right = right.res.int_count > left.res.int_count;
-        if (right.res.int_count == left.res.int_count)
-            go_right = right.res.upper_bound > left.res.upper_bound;
-
-        BranchingData::CRef right_ref = right;
-        BranchingData::CRef left_ref = left;
-        if (!go_right)
-            std::swap(right_ref, left_ref);
-
-        if (branch_callback)
-        {
-            Branching(*branch_callback, right_ref.get().res, i, right_ref.get().way);
-            Branching(*branch_callback, left_ref.get().res, i, left_ref.get().way);
-        }
-        else
-        {
-            Branching(right_ref.get().res, i, right_ref.get().way);
-            Branching(left_ref.get().res, i, left_ref.get().way);
-        }
+        auto ways = GetWays(branch_index);
+        Branching(branching_state_tracker, ways.first, branch_index);
+        Branching(branching_state_tracker, ways.second, branch_index);
     }
 };
 
-void Printer::PrintAndValidate(const Solution& solution, uint64_t bc)
+void Printer::NotifyAll(const Solution& solution)
 {
+    std::lock_guard<std::mutex> lg(callback_mutex);
+    if (solution.integer_count > best_obj_value)
     {
-        std::lock_guard<std::mutex> lg(callback_mutex);
-        if (solution.int_count > best_obj)
+        best_obj_value = solution.integer_count;
+        for (auto& callback : best_upd_callbacks)
         {
-            best_obj = solution.int_count;
-            for (auto& callback : best_upd_callbacks)
-            {
-                auto catch_obj = callback.lock();
-                if (!catch_obj)
-                    continue;
+            auto catch_obj = callback.lock();
+            if (!catch_obj)
+                continue;
 
-                catch_obj->NewBestObj(best_obj);
-            }
+            catch_obj->OnNewBestObjValue(best_obj_value);
         }
     }
-
-    std::lock_guard<std::mutex> lg(print_mutex);
-    std::cout << "Found " << solution.int_count << " " << bc << std::endl;
-
-    std::set<uint32_t> clique;
-    for (uint64_t i = 0; i < solution.vars.size(); ++i)
-        if (EpsValue(solution.vars[i]) == 1.0)
-        {
-            std::cout << i << " ";
-            clique.emplace(i);
-        }
-
-    bool valid = true;
-    for (auto v : clique)
-    {
-        auto neights = graph.get().in_neighbors(v) + graph.get().out_neighbors(v);
-        for (auto v1 : clique)
-        {
-            if (v != v1 && !neights.count(v1))
-                valid = false;
-        }
-    }
-    std::cout << std::endl;
-    std::cout << "Valid " << (valid ? "True" : "False") << std::endl;
-
-    std::cout << std::endl;
-    std::cout << std::endl;
 }
+
 
 struct ParallelExecturor
 {
@@ -593,21 +551,18 @@ private:
 
 void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique)
 {
-    if (graph.get().num_vertices() == 0)
+    if (graph.GetSize() == 0)
         return;
 
     auto color_data = graph.Colorize(Graph::ColorizationType::mindegree_random);
     auto higher_color = *color_data.rbegin();
 
-    static const auto get_degree = [](const Graph& graph, uint32_t vert) {
-        return graph.get().in_neighbors(vert).size() + graph.get().out_neighbors(vert).size();
-    };
     auto min_degree_vert = higher_color.second[0];
-    auto min_degree = get_degree(graph, higher_color.second[0]);
+    auto min_degree = graph.GetDegree(higher_color.second[0]);
 
     for (auto vert : higher_color.second)
     {
-        auto degree = get_degree(graph, vert);
+        auto degree = graph.GetDegree(vert);
         if (min_degree <= degree)
             continue;
 
@@ -616,34 +571,34 @@ void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique)
     }
 
     curr_clique.emplace(min_degree_vert);
-    Heuristic(Graph(graph.get().subgraph(graph.get().in_neighbors(min_degree_vert) + graph.get().out_neighbors(min_degree_vert))), curr_clique);
+    Heuristic(graph.GetSubGraph(min_degree_vert), curr_clique);
 }
 
-void AddHeuristicSolution(const BnBHelper& helper, const Graph& graph, Solution& initial_solution)
+void ApplyHeuristicSolution(const BnBHelper& helper, const Graph& graph, Solution& initial_solution)
 {
     std::set<uint32_t> curr_clique;
     Heuristic(graph, curr_clique);
     for (auto vert : curr_clique)
-        initial_solution.vars[vert] = 1.0;
+        initial_solution.variables[vert] = 1.0;
 
-    initial_solution.max_non_int_index = helper.SelectBranch(initial_solution.vars);
+    initial_solution.branching_index = helper.SelectBranch(initial_solution.variables);
     initial_solution.upper_bound = static_cast<double>(curr_clique.size());
-    initial_solution.int_count = curr_clique.size();
+    initial_solution.integer_count = curr_clique.size();
 }
 
 std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
 {
     ModelData model(graph, IloNumVar::Float);
-    auto n = graph.get().num_vertices();
+    auto n = graph.GetSize();
 
     Printer printer(graph);
-    BranchingCallback first_branching(1, n);
+    BranchingStateTracker first_branching(1, n);
 
     BnBHelper bnbh(model, printer, 1, &first_branching);
     auto initial_solution = bnbh.Solve();
     std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl << std::endl;
 
-    AddHeuristicSolution(bnbh, graph, initial_solution);
+    ApplyHeuristicSolution(bnbh, graph, initial_solution);
 
     bnbh.BnB(initial_solution);
 
