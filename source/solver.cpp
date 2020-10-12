@@ -309,23 +309,39 @@ struct Printer
         return best_obj_value;
     }
 
-
     void OnBestSolution(const Solution& solution)
     {
         NotifyAll(solution);
 
         auto clique = ExtractClique(solution.variables);
-        std::lock_guard<std::mutex> lg(print_mutex);
-        std::cout << "Found " << solution.integer_count << " " << std::endl;
+        std::stringstream ss;
+        ss << "Found " << solution.integer_count << " " << std::endl;
 
         for (auto v : clique)
-            std::cout << v << " ";
+            ss << v << " ";
 
-        std::cout << std::endl;
-        std::cout << "Valid " << (graph.IsClique(clique) ? "True" : "False") << std::endl;
+        ss << std::endl;
+        ss << "Valid " << (graph.IsClique(clique) ? "True" : "False") << std::endl;
 
-        std::cout << std::endl;
-        std::cout << std::endl;
+        ss << std::endl;
+        ss << std::endl;
+
+        Print(ss.str());
+    }
+
+    void ProgressBegin(size_t total)
+    {
+        tasks_total = total;
+    }
+
+    void OnTaskComplete(const Path& path)
+    {
+        std::stringstream ss;
+        ss << "Task finished: " << ++finished_index << " / " << tasks_total << "Path";
+        for (const auto& branch : path)
+            ss << " " << branch.second;
+        ss << std::endl;
+        Print(ss.str());
     }
 
     void NotifyAll(const Solution& solution);
@@ -341,6 +357,9 @@ private:
     uint64_t   best_obj_value = 0;
     std::vector<std::weak_ptr<BnBHelper>> best_upd_callbacks;
 
+    std::atomic<size_t> finished_index = 0;
+    std::atomic<size_t> tasks_total = 0;
+
     std::mutex print_mutex;
     const Graph& graph;
 };
@@ -349,6 +368,7 @@ class BnBHelper
 {
     uint64_t best_obj_value = 1;
     uint64_t branches_count = 0;
+    Solution best_solution{};
 
     ModelData&             model;
     Printer&               printer;
@@ -405,25 +425,6 @@ class BnBHelper
         return ways;
     }
 
-public:
-    BnBHelper(ModelData& m, Printer& p, uint64_t best, BranchingStateTracker* callback = nullptr)
-        : model(m)
-        , printer(p)
-        , branching_state_tracker(callback)
-        , best_obj_value(best)
-    {
-    };
-
-    uint64_t GetBranchCount() const
-    {
-        return branches_count;
-    }
-
-    void OnNewBestObjValue(uint64_t newval)
-    {
-        best_obj_value = std::max(newval, best_obj_value);
-    }
-
     size_t SelectBranch(const std::vector<double>& vars) const
     {
         double min = std::numeric_limits<double>::max();
@@ -467,6 +468,29 @@ public:
         return res;
     }
 
+public:
+    BnBHelper(ModelData& m, Printer& p, uint64_t best, BranchingStateTracker* callback = nullptr)
+        : model(m)
+        , printer(p)
+        , branching_state_tracker(callback)
+        , best_obj_value(best)
+    {
+    };
+
+    uint64_t GetBranchCount() const
+    {
+        return branches_count;
+    }
+
+    const Solution& GetBestSolution() const
+    {
+        return best_solution;
+    }
+
+    void OnNewBestObjValue(uint64_t newval)
+    {
+        best_obj_value = std::max(newval, best_obj_value);
+    }
 
     void BnB(const Solution& solution)
     {
@@ -478,6 +502,7 @@ public:
         if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
         {
             best_obj_value = static_cast<uint64_t>(solution.integer_count);
+            best_solution = solution;
             printer.OnBestSolution(solution);
         }
 
@@ -488,6 +513,20 @@ public:
         auto ways = GetWays(branch_index);
         Branching(branching_state_tracker, ways.first, branch_index);
         Branching(branching_state_tracker, ways.second, branch_index);
+    }
+
+    void BnB(const std::set<uint32_t>& heuristic_clique)
+    {
+        auto initial_solution = Solve();
+        std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl << std::endl;
+        for (auto vert : heuristic_clique)
+            initial_solution.variables[vert] = 1.0;
+
+        initial_solution.branching_index = SelectBranch(initial_solution.variables);
+        initial_solution.upper_bound     = static_cast<double>(heuristic_clique.size());
+        initial_solution.integer_count   = static_cast<uint64_t>(heuristic_clique.size());
+
+        BnB(initial_solution);
     }
 };
 
@@ -507,7 +546,6 @@ void Printer::NotifyAll(const Solution& solution)
         }
     }
 }
-
 
 struct ParallelExecturor
 {
@@ -574,43 +612,32 @@ void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique)
     Heuristic(graph.GetSubGraph(min_degree_vert), curr_clique);
 }
 
-void ApplyHeuristicSolution(const BnBHelper& helper, const Graph& graph, Solution& initial_solution)
+std::set<uint32_t> Heuristic(const Graph& graph)
 {
     std::set<uint32_t> curr_clique;
     Heuristic(graph, curr_clique);
-    for (auto vert : curr_clique)
-        initial_solution.variables[vert] = 1.0;
-
-    initial_solution.branching_index = helper.SelectBranch(initial_solution.variables);
-    initial_solution.upper_bound = static_cast<double>(curr_clique.size());
-    initial_solution.integer_count = curr_clique.size();
+    return curr_clique;
 }
 
 std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
 {
-    ModelData model(graph, IloNumVar::Float);
-    auto n = graph.GetSize();
+    ModelData             model(graph, IloNumVar::Float);
+    Printer               printer(graph);
+    BranchingStateTracker branching_state_tracker(1, graph.GetSize());
 
-    Printer printer(graph);
-    BranchingStateTracker first_branching(1, n);
-
-    BnBHelper bnbh(model, printer, 1, &first_branching);
-    auto initial_solution = bnbh.Solve();
-    std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl << std::endl;
-
-    ApplyHeuristicSolution(bnbh, graph, initial_solution);
-
-    bnbh.BnB(initial_solution);
+    BnBHelper bnb_helper(model, printer, 1, &branching_state_tracker);
+    bnb_helper.BnB(Heuristic(graph));
 
     ParallelExecturor::Tasks tasks;
-    std::atomic<size_t> finished_index = 0;
-    std::atomic<size_t> tasks_total = 0;
+    std::vector<Solution>    solutions = { bnb_helper.GetBestSolution() };
+    std::mutex               solutions_mutex;
+    uint64_t                 total_branches = bnb_helper.GetBranchCount();
 
-    for (const auto& first_branches : first_branching.GetBranches())
+    for (const auto& first_branches : branching_state_tracker.GetBranches())
     {
         const auto& path = first_branches.first;
         const auto& solution = first_branches.second;
-        tasks.push_back([path, solution, &model, &printer, &finished_index, &tasks_total]() {
+        tasks.push_back([path, solution, &model, &printer, &solutions, &solutions_mutex, &total_branches]() {
             ModelData copy_model(model);
 
             std::vector<std::unique_ptr<ConstrainsGuard>> path_constr;
@@ -619,23 +646,32 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
 
             auto helper = std::make_shared<BnBHelper>(copy_model, printer, printer.GetBest());
             printer.AddCallback(helper);
+
             helper->BnB(solution);
 
-            std::stringstream ss;
-            ss << "Task finished: " << ++finished_index << " / " << tasks_total << "Path";
-            for (const auto& branch : path)
-                ss << " " << branch.second;
-            ss << std::endl;
-            printer.Print(ss.str());
+            printer.OnTaskComplete(path);
+
+            std::lock_guard<std::mutex> lg(solutions_mutex);
+            solutions.emplace_back(helper->GetBestSolution());
+            total_branches += helper->GetBranchCount();
         });
     }
-    tasks_total = tasks.size();
+    printer.ProgressBegin(tasks.size());
 
     ParallelExecturor executor(std::move(tasks));
     executor.WaitForJobDone();
 
-    std::cout << "Total branches: " << bnbh.GetBranchCount() << std::endl << std::endl;
+    Solution best{};
+    for (const auto& solution : solutions)
+    {
+        if (solution.integer_count <= best.integer_count)
+            continue;
 
-    return{};
+        best = solution;
+    }
 
+    std::cout << "Total branches: " << total_branches << std::endl << std::endl;
+
+    auto max_clique = ExtractClique(best.variables);
+    return { max_clique.begin(), max_clique.end() };
 }
