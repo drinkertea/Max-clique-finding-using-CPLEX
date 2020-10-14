@@ -31,5 +31,13 @@ add_custom_command(TARGET ${TARGET} PRE_BUILD
                    ${CMAKE_SOURCE_DIR}/graphs/ $<TARGET_FILE_DIR:${TARGET}>/graphs/)
 
 add_custom_command(TARGET ${TARGET} PRE_BUILD
+                   COMMAND ${CMAKE_COMMAND} -E copy_directory
+                   ${CMAKE_SOURCE_DIR}/tasks/ ${CMAKE_CURRENT_BINARY_DIR}/tasks/)
+
+add_custom_command(TARGET ${TARGET} PRE_BUILD
+                   COMMAND ${CMAKE_COMMAND} -E copy_directory
+                   ${CMAKE_SOURCE_DIR}/tasks/ $<TARGET_FILE_DIR:${TARGET}>/tasks/)
+
+add_custom_command(TARGET ${TARGET} PRE_BUILD
                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
                    ${CPLEX_BIN_DIR}/cplex${CPLEX_WIN_VERSION}0.dll $<TARGET_FILE_DIR:${TARGET}>)
