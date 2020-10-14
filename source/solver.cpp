@@ -89,7 +89,7 @@ struct ModelData
         , m_model(m_env)
         , m_variables(m_env, m_size)
     {
-       // AddHeuristicConstrains();
+        AddHeuristicConstrains();
         AddNonEdgePairs();
         AddIndependetConst(Graph::ColorizationType::default);
         AddIndependetConst(Graph::ColorizationType::maxdegree);
