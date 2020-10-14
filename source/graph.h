@@ -3,8 +3,20 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <set>
+#include <map>
+#include <algorithm>
 
-#include "ngraph.hpp"
+template <class  T>
+std::set<T> operator*(const std::set<T>& A, const std::set<T>& B)
+{
+    std::set<T> res;
+
+    std::set_intersection(A.begin(), A.end(), B.begin(), B.end(),
+        inserter(res, res.begin()));
+
+    return res;
+}
 
 struct Graph
 {
@@ -12,7 +24,11 @@ struct Graph
 
     explicit Graph(const std::string& path);
 
-    explicit Graph(NGraph::tGraph<uint32_t> g) : m_graph(std::move(g)) {}
+    explicit Graph(size_t size)
+    {
+        m_graph.resize(size, std::vector<bool>(size, false));
+        m_adj.resize(size);
+    }
 
     enum class ColorizationType
     {
@@ -30,10 +46,9 @@ struct Graph
     {
         for (auto v : verts)
         {
-            auto neights = m_graph.in_neighbors(v) + m_graph.out_neighbors(v);
-            for (auto v1 : neights)
+            for (auto v1 : verts)
             {
-                if (v != v1 && !neights.count(v1))
+                if (v != v1 && !HasEdge(v, v1))
                     return false;
             }
         }
@@ -42,24 +57,41 @@ struct Graph
 
     size_t GetSize() const
     {
-        return m_graph.num_vertices();
+        return m_graph.size();
     }
 
     uint32_t GetDegree(uint32_t vertex) const
     {
-        return m_graph.in_neighbors(vertex).size() + m_graph.out_neighbors(vertex).size();
+        return m_adj[vertex].size();
     }
 
     Graph GetSubGraph(uint32_t vertex) const
     {
-        return Graph(m_graph.subgraph(m_graph.in_neighbors(vertex) + m_graph.out_neighbors(vertex)));
+        Graph sub(m_graph.size());
+        for (auto a : m_adj[vertex])
+        {
+            for (auto b : (m_adj[vertex] * m_adj[a]))
+            {
+                if (a == b)
+                    continue;
+
+                sub.m_graph[a][b] = true;
+                sub.m_graph[b][a] = true;
+
+                sub.m_adj[a].emplace(b);
+                sub.m_adj[b].emplace(a);
+            }
+        }
+
+        return sub;
     }
 
     bool HasEdge(uint32_t i, uint32_t j) const
     {
-        return m_graph.out_neighbors(i).count(j);
+        return m_graph[i][j];
     }
 
 private:
-    NGraph::tGraph<uint32_t> m_graph;
+    std::vector<std::vector<bool>> m_graph;
+    std::vector<std::set<uint32_t>> m_adj;
 };

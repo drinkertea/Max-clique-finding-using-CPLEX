@@ -20,7 +20,7 @@ void Test(const std::string& file_path, const std::string& path)
         Graph g(path);
 
         auto int_start = std::chrono::system_clock::now();
-        std::set<uint32_t> int_result = {}; // cf.FindMaxCliqueInteger(g);
+        std::vector<uint32_t> int_result = cf.FindMaxCliqueInteger(g);
         auto int_end = std::chrono::system_clock::now();
         int_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(int_end - int_start).count();
 

@@ -89,7 +89,7 @@ struct ModelData
         , m_model(m_env)
         , m_variables(m_env, m_size)
     {
-        AddHeuristicConstrains();
+       // AddHeuristicConstrains();
         AddNonEdgePairs();
         AddIndependetConst(Graph::ColorizationType::default);
         AddIndependetConst(Graph::ColorizationType::maxdegree);
@@ -538,7 +538,7 @@ public:
 
         ++branches_count;
 
-        if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
+        if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj_value))
             return;
 
         if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
@@ -560,19 +560,16 @@ public:
     {
         auto initial_solution = Solve();
         std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl << std::endl;
-        for (auto vert : heuristic_clique)
-            initial_solution.variables[vert] = 1.0;
 
-        initial_solution.branching_index = SelectBranch(initial_solution.variables);
+        if (initial_solution.integer_count < heuristic_clique.size())
+        {
+            initial_solution.branching_index = SelectBranch(initial_solution.variables);
 
-        auto size = initial_solution.variables.size();
-        initial_solution.variables.clear();
-        initial_solution.variables.resize(size, 0.0);
-        for (auto vert : heuristic_clique)
-            initial_solution.variables[vert] = 1.0;
-
-        initial_solution.upper_bound     = static_cast<double>(heuristic_clique.size());
-        initial_solution.integer_count   = static_cast<uint64_t>(heuristic_clique.size());
+            for (auto vert : heuristic_clique)
+                initial_solution.variables[vert] = 1.0;
+            initial_solution.upper_bound = static_cast<double>(heuristic_clique.size());
+            initial_solution.integer_count = static_cast<uint64_t>(heuristic_clique.size());
+        }
 
         BnB(initial_solution);
     }
@@ -618,12 +615,9 @@ private:
     std::vector<std::thread> execution_threads;
 };
 
-void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique)
+void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique, Graph::ColorizationType strategy)
 {
-    if (graph.GetSize() == 0)
-        return;
-
-    auto color_data = graph.Colorize(Graph::ColorizationType::mindegree_random);
+    auto color_data = graph.Colorize(strategy);
     auto higher_color = *color_data.rbegin();
 
     auto min_degree_vert = higher_color.second[0];
@@ -640,14 +634,39 @@ void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique)
     }
 
     curr_clique.emplace(min_degree_vert);
-    Heuristic(graph.GetSubGraph(min_degree_vert), curr_clique);
+    if (graph.GetDegree(min_degree_vert) <= 1)
+    {
+        for (uint32_t i = 0; i < graph.GetSize(); ++i)
+        {
+            if (graph.HasEdge(i, min_degree_vert))
+            {
+                curr_clique.emplace(i);
+                return;
+            }
+        }
+        assert(false);
+        return;
+    }
+    Heuristic(graph.GetSubGraph(min_degree_vert), curr_clique, strategy);
 }
 
 std::set<uint32_t> Heuristic(const Graph& graph)
 {
-    std::set<uint32_t> curr_clique;
-    Heuristic(graph, curr_clique);
-    return curr_clique;
+    std::set<uint32_t> best_clique;
+    auto strategies = {
+        Graph::ColorizationType::default,
+        Graph::ColorizationType::random,
+        Graph::ColorizationType::maxdegree_random,
+        Graph::ColorizationType::mindegree_random,
+    };
+    for (auto str : strategies)
+    {
+        std::set<uint32_t> curr_clique;
+        Heuristic(graph, curr_clique, str);
+        if (curr_clique.size() > best_clique.size())
+            best_clique = std::move(curr_clique);
+    }
+    return best_clique;
 }
 
 std::vector<uint32_t> CliqueFinder::FindMaxCliqueInteger(const Graph& graph)

@@ -7,8 +7,6 @@
 
 Graph::Graph(const std::string& path)
 {
-    m_graph.set_undirected();
-
     std::ifstream infile(path);
     if (!infile)
         throw std::runtime_error("Invalid file path!");
@@ -32,6 +30,9 @@ Graph::Graph(const std::string& path)
             uint32_t edge_count   = 0u;
             if (!(iss >> name >> vertex_count >> edge_count))
                 continue;
+
+            m_graph.resize(vertex_count, std::vector<bool>(vertex_count, false));
+            m_adj.resize(vertex_count);
         }
         else if (type == 'e')
         {
@@ -43,7 +44,11 @@ Graph::Graph(const std::string& path)
             if (!a || !b)
                 throw std::runtime_error("Unexpected vertex index!");
 
-            m_graph.insert_edge(a - 1u, b - 1u);
+            m_graph[a - 1u][b - 1u] = true;
+            m_graph[b - 1u][a - 1u] = true;
+
+            m_adj[a - 1u].emplace(b - 1u);
+            m_adj[b - 1u].emplace(a - 1u);
         }
         else
         {
@@ -54,26 +59,14 @@ Graph::Graph(const std::string& path)
 
 Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
 {
-    auto n = m_graph.rbegin()->first + 1;
+    auto n = m_graph.size();
     constexpr uint32_t c_no_color = std::numeric_limits<uint32_t>::max();
 
     ColorToVerts result;
-    std::map<uint32_t, uint32_t> colors = { { m_graph.begin()->first, 0 } };
-    result[0].emplace_back(m_graph.begin()->first);
-
     std::vector<bool> available(n, false);
 
-    std::vector<std::reference_wrapper<const std::pair<
-        const NGraph::tGraph<uint32_t>::vertex,
-        NGraph::tGraph<uint32_t>::in_out_edge_sets
-    >>> nodes;
-
-    for (const auto& node : m_graph)
-        nodes.emplace_back(node);
-
-    static const auto get_degree = [](const auto& node) {
-        return node.get().second.first.size() + node.get().second.second.size();
-    };
+    std::vector<uint32_t> nodes(n, 0);
+    std::iota(nodes.begin(), nodes.end(), 0);
 
     std::vector<uint32_t> random_metric(n, 0);
     std::iota(random_metric.begin(), random_metric.end(), 0);
@@ -84,12 +77,12 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
     if (type == ColorizationType::maxdegree)
     {
         std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) {
-            return get_degree(l) > get_degree(r);
+            return GetDegree(l) > GetDegree(r);
         });
     } else if (type == ColorizationType::mindegree)
     {
         std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) {
-            return  get_degree(l) < get_degree(r);
+            return GetDegree(l) < GetDegree(r);
         });
     } else if (type == ColorizationType::random)
     {
@@ -97,25 +90,25 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
     } else if(type == ColorizationType::maxdegree_random)
     {
         std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) -> bool {
-            if (get_degree(l) == get_degree(r))
-                return random_metric[l.get().first] > random_metric[r.get().first];
-            return get_degree(l) > get_degree(r);
+            if (GetDegree(l) == GetDegree(r))
+                return random_metric[l] > random_metric[r];
+            return GetDegree(l) > GetDegree(r);
         });
     }
     else if (type == ColorizationType::mindegree_random)
     {
         std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) -> bool {
-            if (get_degree(l) == get_degree(r))
-                return random_metric[l.get().first] > random_metric[r.get().first];
-            return  get_degree(l) < get_degree(r);
+            if (GetDegree(l) == GetDegree(r))
+                return random_metric[l] > random_metric[r];
+            return  GetDegree(l) < GetDegree(r);
         });
     }
 
-    for (const auto& node_wr : nodes)
+    std::map<uint32_t, uint32_t> colors = { { nodes.front(), 0 } };
+
+    for (const auto& node : nodes)
     {
-        const auto& node = node_wr.get();
-        auto all = node.second.second + node.second.first;
-        for (const auto& adj : all)
+        for (const auto& adj : m_adj[node])
             if (colors.count(adj))
                 available[colors[adj]] = true;
 
@@ -124,10 +117,10 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
             if (available[cr] == false)
                 break;
 
-        colors[node.first] = cr;
-        result[cr].emplace_back(node.first);
+        colors[node] = cr;
+        result[cr].emplace_back(node);
 
-        for (const auto& adj : all)
+        for (const auto& adj : m_adj[node])
             if (colors.count(adj))
                 available[colors[adj]] = false;
     }
