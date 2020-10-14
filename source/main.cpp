@@ -4,19 +4,21 @@
 #include <iostream>
 #include <algorithm>
 #include <chrono>
+#include <thread>
+#include <Windows.h>
 
 std::vector<std::string> g_simple_graphs = {
-    "c-fat200-1.clq",
-    "c-fat200-2.clq",
-    "c-fat200-5.clq",
-    "c-fat500-1.clq",
-    "c-fat500-10.clq",
-    "c-fat500-2.clq",
-    "c-fat500-5.clq",
-    "MANN_a9.clq",
-    "hamming6-2.clq",
-    "hamming6-4.clq",
-    "C125.9.clq",
+    //"c-fat200-1.clq",
+    //"c-fat200-2.clq",
+    //"c-fat200-5.clq",
+    //"c-fat500-1.clq",
+    //"c-fat500-10.clq",
+    //"c-fat500-2.clq",
+    //"c-fat500-5.clq",
+    //"MANN_a9.clq",
+    //"hamming6-2.clq",
+    //"hamming6-4.clq",
+    //"C125.9.clq",
     "keller4.clq",
     "brock200_1.clq",
     "brock200_2.clq",
@@ -99,22 +101,37 @@ void Test(const std::string& file_path, const std::string& path)
     uint64_t int_elapsed = 0;
     uint64_t bnb_elapsed = 0;
     std::string test_result = "CRASHED";
+    std::vector<uint32_t> max_clique;
 
+    CliqueFinder cf{ false };
     try
     {
         Graph g(path);
 
         auto int_start = std::chrono::system_clock::now();
-        auto int_result = FindMaxCliqueInteger(g);
+        auto int_result = cf.FindMaxCliqueInteger(g);
         auto int_end = std::chrono::system_clock::now();
         int_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(int_end - int_start).count();
 
+        std::thread timer_thread([&cf]() {
+            using namespace std::chrono_literals;
+            std::this_thread::sleep_for(7200s);
+            cf.stop = true;
+        });
+
         auto bnb_start = std::chrono::system_clock::now();
-        auto bnb_result = FindMaxCliqueBnB(g);
+        auto bnb_result = cf.FindMaxCliqueBnB(g);
         auto bnb_end = std::chrono::system_clock::now();
         bnb_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(bnb_end - bnb_start).count();
 
+        TerminateThread(timer_thread.native_handle(), 0);
+        timer_thread.join();
+
         test_result = int_result.size() == bnb_result.size() ? "PASSED" : "FAILED";
+        if (cf.stop)
+            test_result += " INTERRUPTED";
+
+        max_clique = bnb_result;
     }
     catch (std::runtime_error&)
     {
@@ -126,6 +143,12 @@ void Test(const std::string& file_path, const std::string& path)
     ss << "Result:                          " << test_result << std::endl;
     ss << "CPLEX integer algorithm time:    " << int_elapsed << " ms" << std::endl;
     ss << "Branch and Bound algorithm time: " << bnb_elapsed << " ms" << std::endl;
+    ss << "Branch and Bound branch count:   " << cf.branch_count << std::endl;
+    ss << "Max clique size:                 " << max_clique.size() << std::endl;
+    ss << "Max clique:                      ";
+    for (auto v : max_clique)
+        ss << v << " ";
+    ss << std::endl;
     ss << std::endl;
 
     std::ofstream outfile(file_path, std::ios_base::app);;

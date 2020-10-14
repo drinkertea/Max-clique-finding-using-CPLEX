@@ -229,35 +229,6 @@ ConstrainsGuard::~ConstrainsGuard()
     m_expr.end();
 }
 
-std::vector<uint32_t> FindMaxCliqueInteger(const Graph& graph)
-{
-    ModelData model(graph, IloNumVar::Int);
-
-    IloCplex cplex = model.CreateSolver();
-    cplex.exportModel("model.lp");
-
-    bool solved = cplex.solve();
-    std::vector<uint32_t> res;
-    std::vector<double> vars;
-
-    auto n = graph.GetSize();
-    auto obj_val = cplex.getObjValue();
-    if (solved) {
-        for (uint32_t i = 0; i < n; ++i)
-        {
-            auto val = model.ExtractValue(cplex, i);
-            vars.push_back(val);
-            if (val)
-                res.emplace_back(i);
-        }
-    }
-    else
-    {
-        throw std::runtime_error("Cplex error");
-    }
-    return res;
-}
-
 struct BranchingStateTracker
 {
     BranchingStateTracker(size_t ones_cnt, size_t md)
@@ -368,6 +339,7 @@ private:
 
 class BnBHelper
 {
+    std::atomic_bool&      stop;
     std::atomic<uint64_t>& best_obj_value;
     uint64_t               branches_count = 0;
     ModelData&             model;
@@ -469,11 +441,12 @@ class BnBHelper
     }
 
 public:
-    BnBHelper(ModelData& m, ThreadsAccumulator& p, std::atomic<uint64_t>& best, BranchingStateTracker* callback = nullptr)
+    BnBHelper(ModelData& m, ThreadsAccumulator& p, std::atomic<uint64_t>& best, std::atomic_bool& stop, BranchingStateTracker* callback = nullptr)
         : model(m)
         , accumulator(p)
         , branching_state_tracker(callback)
         , best_obj_value(best)
+        , stop(stop)
     {
     };
 
@@ -484,6 +457,9 @@ public:
 
     void BnB(const Solution& solution)
     {
+        if (stop)
+            return;
+
         ++branches_count;
 
         if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj_value))
@@ -598,14 +574,43 @@ std::set<uint32_t> Heuristic(const Graph& graph)
     return curr_clique;
 }
 
-std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
+std::vector<uint32_t> CliqueFinder::FindMaxCliqueInteger(const Graph& graph)
+{
+    ModelData model(graph, IloNumVar::Int);
+
+    IloCplex cplex = model.CreateSolver();
+    cplex.exportModel("model.lp");
+
+    bool solved = cplex.solve();
+    std::vector<uint32_t> res;
+    std::vector<double> vars;
+
+    auto n = graph.GetSize();
+    auto obj_val = cplex.getObjValue();
+    if (solved) {
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            auto val = model.ExtractValue(cplex, i);
+            vars.push_back(val);
+            if (val)
+                res.emplace_back(i);
+        }
+    }
+    else
+    {
+        throw std::runtime_error("Cplex error");
+    }
+    return res;
+}
+
+std::vector<uint32_t> CliqueFinder::FindMaxCliqueBnB(const Graph& graph)
 {
     ModelData             model(graph, IloNumVar::Float);
     ThreadsAccumulator    accumulator(graph);
     BranchingStateTracker branching_state_tracker(1, graph.GetSize());
 
     std::atomic<uint64_t> best_obj_value = 1;
-    BnBHelper bnb_helper(model, accumulator, best_obj_value, &branching_state_tracker);
+    BnBHelper bnb_helper(model, accumulator, best_obj_value, stop, &branching_state_tracker);
     bnb_helper.BnB(Heuristic(graph));
 
     ParallelExecturor::Tasks tasks;
@@ -614,14 +619,14 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     {
         const auto& path = first_branches.first;
         const auto& solution = first_branches.second;
-        tasks.push_back([path, solution, &model, &accumulator, &total_branches, &best_obj_value]() {
+        tasks.push_back([this, path, solution, &model, &accumulator, &total_branches, &best_obj_value]() {
             ModelData copy_model(model);
 
             std::vector<std::unique_ptr<ConstrainsGuard>> path_constr;
             for (const auto& branch : path)
                 path_constr.push_back(copy_model.AddScopedConstrainsPtr(branch.first, branch.second, branch.second));
 
-            auto helper = std::make_shared<BnBHelper>(copy_model, accumulator, best_obj_value);
+            auto helper = std::make_shared<BnBHelper>(copy_model, accumulator, best_obj_value, stop);
             helper->BnB(solution);
 
             accumulator.OnTaskComplete(path);
@@ -634,6 +639,7 @@ std::vector<uint32_t> FindMaxCliqueBnB(const Graph& graph)
     executor.WaitForJobDone();
 
     std::cout << "Total branches: " << total_branches << std::endl << std::endl;
+    branch_count = total_branches;
 
     auto max_clique = ExtractClique(accumulator.GetBestSolution().variables);
     return { max_clique.begin(), max_clique.end() };
