@@ -89,6 +89,7 @@ struct ModelData
         , m_model(m_env)
         , m_variables(m_env, m_size)
     {
+        AddHeuristicConstrains();
         AddNonEdgePairs();
         AddIndependetConst(Graph::ColorizationType::default);
         AddIndependetConst(Graph::ColorizationType::maxdegree);
@@ -113,35 +114,6 @@ struct ModelData
     {
         m_env.end();
     }
-
-    void InitModel(const std::set<std::set<uint32_t>>& m_sum_vert_less_one)
-    {
-        for (uint32_t i = 0; i < m_size; ++i)
-        {
-            std::string name = "y[" + std::to_string(i + 1) + "]";
-            m_variables[i] = IloNumVar(m_env, 0, 1, m_type, name.c_str());
-        }
-
-        IloRangeArray constrains(m_env, m_sum_vert_less_one.size());
-        uint32_t k = 0u;
-        for (const auto& constr : m_sum_vert_less_one)
-        {
-            IloExpr expr(m_env);
-            for (auto vert : constr)
-                expr += m_variables[vert];
-            std::string name = "constr[" + std::to_string(k) + "]";
-            constrains[k++] = IloRange(m_env, 0, expr, 1, name.c_str());
-        }
-
-        IloExpr obj_expr(m_env);
-        for (uint32_t i = 0; i < m_size; ++i)
-            obj_expr += m_variables[i];
-        IloObjective obj(m_env, obj_expr, IloObjective::Maximize);
-
-        m_model.add(constrains);
-        m_model.add(obj);
-    }
-
     IloCplex CreateSolver() const
     {
         IloCplex res(m_model);
@@ -170,6 +142,34 @@ struct ModelData
     }
 
 private:
+    void InitModel(const std::set<std::set<uint32_t>>& m_sum_vert_less_one)
+    {
+        for (uint32_t i = 0; i < m_size; ++i)
+        {
+            std::string name = "y[" + std::to_string(i + 1) + "]";
+            m_variables[i] = IloNumVar(m_env, 0, 1, m_type, name.c_str());
+        }
+
+        IloRangeArray constrains(m_env, m_sum_vert_less_one.size());
+        uint32_t k = 0u;
+        for (const auto& constr : m_sum_vert_less_one)
+        {
+            IloExpr expr(m_env);
+            for (auto vert : constr)
+                expr += m_variables[vert];
+            std::string name = "constr[" + std::to_string(k) + "]";
+            constrains[k++] = IloRange(m_env, 0, expr, 1, name.c_str());
+        }
+
+        IloExpr obj_expr(m_env);
+        for (uint32_t i = 0; i < m_size; ++i)
+            obj_expr += m_variables[i];
+        IloObjective obj(m_env, obj_expr, IloObjective::Maximize);
+
+        m_model.add(constrains);
+        m_model.add(obj);
+    }
+
     void AddIndependetConst(Graph::ColorizationType type)
     {
         auto verts_by_color = m_graph.Colorize(type);
@@ -196,6 +196,82 @@ private:
                     continue;
 
                 m_sum_vert_less_one.emplace(std::set<uint32_t>{ i, j });
+            }
+        }
+    }
+
+    struct NonEdgeKHelper
+    {
+        uint32_t m_start_depth = 0;
+        uint32_t m_break_count = 1000;
+        size_t m_size = 0;
+        const Graph& m_graph;
+
+        std::vector<std::vector<uint32_t>> res;
+        std::vector<uint32_t> check;
+        uint32_t depth = 0;
+
+        bool Skip(uint32_t start)
+        {
+            for (auto x : check)
+            {
+                if (m_graph.HasEdge(x, start))
+                    return true;
+            }
+            return false;
+        }
+
+        void AddNonEdgeRec(uint32_t start)
+        {
+            if (depth <= m_start_depth || res.size() >= m_break_count)
+                return;
+
+            if (check.size() > m_start_depth)
+            {
+                res.emplace_back(check);
+                if (check.size() == depth)
+                    return;
+            }
+
+            for (uint32_t i = start; i < m_size; ++i)
+            {
+                if (Skip(i))
+                    continue;
+
+                check.push_back(i);
+                AddNonEdgeRec(i + 1);
+                check.pop_back();
+            }
+        }
+
+        void AddNonEdgeRec()
+        {
+            res.clear();
+            res.reserve(m_break_count);
+            check.clear();
+            check.reserve(m_size);
+            AddNonEdgeRec(0);
+        }
+    };
+
+    void AddHeuristicConstrains()
+    {
+        // If v1 .. vk all has not edge -> v1 + v2 + ... + vk <= 1
+        uint32_t break_count = uint32_t(double(m_size) * std::exp(1.));
+        // searching for optimal "k" < "m_break_count" to no add too much constrains
+        NonEdgeKHelper helper{ 0, break_count, m_size, m_graph };
+        for (uint32_t i = 4; i < m_size; ++i)
+        {
+            helper.m_start_depth = i;
+            helper.depth = i + 10;
+            helper.AddNonEdgeRec();
+            if (helper.res.size() < break_count)
+            {
+                for (const auto& verrt_set : helper.res)
+                {
+                    m_sum_vert_less_one.emplace(verrt_set.begin(), verrt_set.end());
+                }
+                break;
             }
         }
     }
@@ -462,7 +538,7 @@ public:
 
         ++branches_count;
 
-        if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj_value))
+        if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
             return;
 
         if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
