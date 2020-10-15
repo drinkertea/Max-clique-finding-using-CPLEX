@@ -97,13 +97,16 @@ struct ModelData
         m_sum_vert_less_one += m_graph.GetHeuristicConstr(Graph::ColorizationType::random);
         m_sum_vert_less_one += m_graph.GetHeuristicConstr(Graph::ColorizationType::maxdegree_random);
         m_sum_vert_less_one += m_graph.GetHeuristicConstr(Graph::ColorizationType::mindegree_random);
-        AddNonEdgePairs();
         AddIndependetConst(Graph::ColorizationType::default);
         AddIndependetConst(Graph::ColorizationType::maxdegree);
         AddIndependetConst(Graph::ColorizationType::mindegree);
         AddIndependetConst(Graph::ColorizationType::random);
         AddIndependetConst(Graph::ColorizationType::maxdegree_random);
         AddIndependetConst(Graph::ColorizationType::mindegree_random);
+
+        AddHeuristicConstrains();
+
+        AddNonEdgePairs();
         InitModel(m_sum_vert_less_one);
     }
 
@@ -148,13 +151,13 @@ struct ModelData
         return m_size; 
     }
 
-    bool AddHeuristicConstrains(uint32_t max_depth)
+    bool AddHeuristicConstrains()
     {
         // If v1 .. vk all has not edge -> v1 + v2 + ... + vk <= 1
         uint32_t break_count = uint32_t(double(m_size) * std::exp(3.14159));
         // searching for optimal "k" < "m_break_count" to no add too much constrains
         std::atomic_bool stop = false;
-        NonEdgeKHelper helper{ max_depth, break_count, m_size, m_graph, stop };
+        NonEdgeKHelper helper{ m_size, break_count, m_size, m_graph, stop };
 
         auto int_start = std::chrono::system_clock::now();
         std::thread timer_thread([&stop]() {
@@ -172,17 +175,14 @@ struct ModelData
             return false;
         }
 
-        std::set<std::set<uint32_t>> add_constr;
         for (int i = 3; i < m_size; ++i)
         {
             if (helper.res[i].size() >= break_count)
                 continue;
 
             for (const auto& constr : helper.res[i])
-                add_constr.emplace(std::set<uint32_t>{constr.begin(), constr.end()});
+                m_sum_vert_less_one.emplace(std::set<uint32_t>{constr.begin(), constr.end()});
         }
-        if (!add_constr.empty())
-            AddConstrains(add_constr);
 
         auto int_end = std::chrono::system_clock::now();
         auto int_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(int_end - int_start).count();
@@ -599,17 +599,6 @@ public:
         std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl;
         std::cout << "Heuristic solution: " << heuristic_clique.size() << std::endl;
         std::cout << "Time: " << int_elapsed << " ms" << std::endl << std::endl;
-
-        if (static_cast<uint32_t>(initial_solution.upper_bound) + 1 >
-            static_cast<uint32_t>(1.2 * double(heuristic_clique.size())))
-        {
-            std::cout << "Too bad, try to add more constrains..." << std::endl;
-            if (model.AddHeuristicConstrains(static_cast<uint32_t>(initial_solution.upper_bound) + 1))
-            {
-                initial_solution = Solve();
-                std::cout << "Seconditional solution: " << initial_solution.upper_bound << std::endl << std::endl;
-            }
-        }
 
         if (initial_solution.integer_count < heuristic_clique.size())
         {
