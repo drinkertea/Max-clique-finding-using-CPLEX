@@ -572,7 +572,7 @@ public:
 
         ++branches_count;
 
-        if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj_value + 1))
+        if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
             return;
 
         if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
@@ -592,9 +592,13 @@ public:
 
     void BnB(const std::set<uint32_t>& heuristic_clique)
     {
+        auto int_start = std::chrono::system_clock::now();
         auto initial_solution = Solve();
+        auto int_end = std::chrono::system_clock::now();
+        auto int_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(int_end - int_start).count();
         std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl;
-        std::cout << "Heuristic solution: " << heuristic_clique.size() << std::endl << std::endl;
+        std::cout << "Heuristic solution: " << heuristic_clique.size() << std::endl;
+        std::cout << "Time: " << int_elapsed << " ms" << std::endl << std::endl;
 
         if (static_cast<uint32_t>(initial_solution.upper_bound) + 1 >
             static_cast<uint32_t>(1.2 * double(heuristic_clique.size())))
