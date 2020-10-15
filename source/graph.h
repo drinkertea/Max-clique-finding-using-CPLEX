@@ -91,6 +91,8 @@ struct Graph
         return m_graph[i][j];
     }
 
+    std::vector<uint32_t> GetOrderedNodes(ColorizationType type) const;
+
 private:
     std::vector<std::vector<bool>> m_graph;
     std::vector<std::set<uint32_t>> m_adj;

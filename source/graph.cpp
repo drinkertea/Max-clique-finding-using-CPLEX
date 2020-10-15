@@ -65,44 +65,7 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
     ColorToVerts result;
     std::vector<bool> available(n, false);
 
-    std::vector<uint32_t> nodes(n, 0);
-    std::iota(nodes.begin(), nodes.end(), 0);
-
-    std::vector<uint32_t> random_metric(n, 0);
-    std::iota(random_metric.begin(), random_metric.end(), 0);
-    static uint64_t seed = 42;
-    std::mt19937 g(seed++);
-    std::shuffle(random_metric.begin(), random_metric.end(), g);
-
-    if (type == ColorizationType::maxdegree)
-    {
-        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) {
-            return GetDegree(l) > GetDegree(r);
-        });
-    } else if (type == ColorizationType::mindegree)
-    {
-        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) {
-            return GetDegree(l) < GetDegree(r);
-        });
-    } else if (type == ColorizationType::random)
-    {
-        std::shuffle(nodes.begin(), nodes.end(), g);
-    } else if(type == ColorizationType::maxdegree_random)
-    {
-        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) -> bool {
-            if (GetDegree(l) == GetDegree(r))
-                return random_metric[l] > random_metric[r];
-            return GetDegree(l) > GetDegree(r);
-        });
-    }
-    else if (type == ColorizationType::mindegree_random)
-    {
-        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) -> bool {
-            if (GetDegree(l) == GetDegree(r))
-                return random_metric[l] > random_metric[r];
-            return  GetDegree(l) < GetDegree(r);
-        });
-    }
+    auto nodes = GetOrderedNodes(type);
 
     std::map<uint32_t, uint32_t> colors = { { nodes.front(), 0 } };
 
@@ -126,4 +89,51 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
     }
 
     return result;
+}
+
+std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
+{
+    std::vector<uint32_t> nodes(m_graph.size(), 0);
+    std::iota(nodes.begin(), nodes.end(), 0);
+
+    std::vector<uint32_t> random_metric(m_graph.size(), 0);
+    std::iota(random_metric.begin(), random_metric.end(), 0);
+    static uint64_t seed = 42;
+    std::mt19937 g(seed++);
+    std::shuffle(random_metric.begin(), random_metric.end(), g);
+
+    if (type == ColorizationType::maxdegree)
+    {
+        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) {
+            return GetDegree(l) > GetDegree(r);
+        });
+    }
+    else if (type == ColorizationType::mindegree)
+    {
+        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) {
+            return GetDegree(l) < GetDegree(r);
+        });
+    }
+    else if (type == ColorizationType::random)
+    {
+        std::shuffle(nodes.begin(), nodes.end(), g);
+    }
+    else if (type == ColorizationType::maxdegree_random)
+    {
+        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) -> bool {
+            if (GetDegree(l) == GetDegree(r))
+                return random_metric[l] > random_metric[r];
+            return GetDegree(l) > GetDegree(r);
+        });
+    }
+    else if (type == ColorizationType::mindegree_random)
+    {
+        std::sort(nodes.begin(), nodes.end(), [&](const auto& l, const auto& r) -> bool {
+            if (GetDegree(l) == GetDegree(r))
+                return random_metric[l] > random_metric[r];
+            return  GetDegree(l) < GetDegree(r);
+        });
+    }
+
+    return nodes;
 }

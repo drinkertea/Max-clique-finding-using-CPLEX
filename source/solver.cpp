@@ -1,6 +1,8 @@
 #include "solver.h"
 #include "graph.h"
 
+#define NOMINMAX
+#include <Windows.h>
 #include <string>
 #include <sstream>
 #include <stdexcept>
@@ -89,7 +91,6 @@ struct ModelData
         , m_model(m_env)
         , m_variables(m_env, m_size)
     {
-        AddHeuristicConstrains();
         AddNonEdgePairs();
         AddIndependetConst(Graph::ColorizationType::default);
         AddIndependetConst(Graph::ColorizationType::maxdegree);
@@ -141,15 +142,54 @@ struct ModelData
         return m_size; 
     }
 
-private:
-    void InitModel(const std::set<std::set<uint32_t>>& m_sum_vert_less_one)
+    bool AddHeuristicConstrains(uint32_t max_depth)
     {
-        for (uint32_t i = 0; i < m_size; ++i)
+        // If v1 .. vk all has not edge -> v1 + v2 + ... + vk <= 1
+        uint32_t break_count = uint32_t(double(m_size) * std::exp(3.14159));
+        // searching for optimal "k" < "m_break_count" to no add too much constrains
+        std::atomic_bool stop = false;
+        NonEdgeKHelper helper{ max_depth, break_count, m_size, m_graph, stop };
+
+        auto int_start = std::chrono::system_clock::now();
+        std::thread timer_thread([&stop]() {
+            using namespace std::chrono_literals;
+            std::this_thread::sleep_for(500ms);
+            stop = true;
+        });
+
+        helper.AddNonEdgeRec();
+
+        if (stop)
         {
-            std::string name = "y[" + std::to_string(i + 1) + "]";
-            m_variables[i] = IloNumVar(m_env, 0, 1, m_type, name.c_str());
+            std::cout << "AddHeuristicConstrains interrupted" << std::endl;
+            timer_thread.join();
+            return false;
         }
 
+        std::set<std::set<uint32_t>> add_constr;
+        for (int i = 3; i < m_size; ++i)
+        {
+            if (helper.res[i].size() >= break_count)
+                continue;
+
+            for (const auto& constr : helper.res[i])
+                add_constr.emplace(std::set<uint32_t>{constr.begin(), constr.end()});
+        }
+        if (!add_constr.empty())
+            AddConstrains(add_constr);
+
+        auto int_end = std::chrono::system_clock::now();
+        auto int_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(int_end - int_start).count();
+        std::cout << "AddHeuristicConstrains " << int_elapsed << " ms" << std::endl;
+
+        TerminateThread(timer_thread.native_handle(), 0);
+        timer_thread.join();
+        return true;
+    }
+
+private:
+    void AddConstrains(const std::set<std::set<uint32_t>>& m_sum_vert_less_one)
+    {
         IloRangeArray constrains(m_env, m_sum_vert_less_one.size());
         uint32_t k = 0u;
         for (const auto& constr : m_sum_vert_less_one)
@@ -160,13 +200,23 @@ private:
             std::string name = "constr[" + std::to_string(k) + "]";
             constrains[k++] = IloRange(m_env, 0, expr, 1, name.c_str());
         }
+        m_model.add(constrains);
+    }
+
+    void InitModel(const std::set<std::set<uint32_t>>& m_sum_vert_less_one)
+    {
+        for (uint32_t i = 0; i < m_size; ++i)
+        {
+            std::string name = "y[" + std::to_string(i + 1) + "]";
+            m_variables[i] = IloNumVar(m_env, 0, 1, m_type, name.c_str());
+        }
 
         IloExpr obj_expr(m_env);
         for (uint32_t i = 0; i < m_size; ++i)
             obj_expr += m_variables[i];
         IloObjective obj(m_env, obj_expr, IloObjective::Maximize);
 
-        m_model.add(constrains);
+        AddConstrains(m_sum_vert_less_one);
         m_model.add(obj);
     }
 
@@ -202,14 +252,25 @@ private:
 
     struct NonEdgeKHelper
     {
-        uint32_t m_start_depth = 0;
-        uint32_t m_break_count = 1000;
-        size_t m_size = 0;
-        const Graph& m_graph;
+        uint32_t          max_depth = 0;
+        uint32_t          m_break_count = 1000;
+        size_t            m_size = 0;
+        const Graph&      m_graph;
+        std::atomic_bool& stop;
 
-        std::vector<std::vector<uint32_t>> res;
+        std::vector<std::vector<std::vector<uint32_t>>> res;
+
+        void AddNonEdgeRec()
+        {
+            check.clear();
+            check.reserve(m_size);
+            res.resize(m_size);
+            for (auto& x : res)
+                x.reserve(m_break_count);
+            AddNonEdgeRec(0);
+        }
+
         std::vector<uint32_t> check;
-        uint32_t depth = 0;
 
         bool Skip(uint32_t start)
         {
@@ -223,15 +284,11 @@ private:
 
         void AddNonEdgeRec(uint32_t start)
         {
-            if (depth <= m_start_depth || res.size() >= m_break_count)
+            if (stop || check.size() > max_depth)
                 return;
 
-            if (check.size() > m_start_depth)
-            {
-                res.emplace_back(check);
-                if (check.size() == depth)
-                    return;
-            }
+            if (res[check.size()].size() < m_break_count)
+                res[check.size()].emplace_back(check);
 
             for (uint32_t i = start; i < m_size; ++i)
             {
@@ -243,38 +300,8 @@ private:
                 check.pop_back();
             }
         }
-
-        void AddNonEdgeRec()
-        {
-            res.clear();
-            res.reserve(m_break_count);
-            check.clear();
-            check.reserve(m_size);
-            AddNonEdgeRec(0);
-        }
     };
 
-    void AddHeuristicConstrains()
-    {
-        // If v1 .. vk all has not edge -> v1 + v2 + ... + vk <= 1
-        uint32_t break_count = uint32_t(double(m_size) * std::exp(1.));
-        // searching for optimal "k" < "m_break_count" to no add too much constrains
-        NonEdgeKHelper helper{ 0, break_count, m_size, m_graph };
-        for (uint32_t i = 4; i < m_size; ++i)
-        {
-            helper.m_start_depth = i;
-            helper.depth = i + 10;
-            helper.AddNonEdgeRec();
-            if (helper.res.size() < break_count)
-            {
-                for (const auto& verrt_set : helper.res)
-                {
-                    m_sum_vert_less_one.emplace(verrt_set.begin(), verrt_set.end());
-                }
-                break;
-            }
-        }
-    }
 
     friend struct ConstrainsGuard;
 
@@ -499,7 +526,8 @@ class BnBHelper
         Solution res{};
 
         IloCplex cplex = model.CreateSolver();
-        cplex.setParam(IloCplex::Param::Threads, 1);
+        if (!branching_state_tracker)
+            cplex.setParam(IloCplex::Param::Threads, 1);
         if (!cplex.solve())
             return res;
 
@@ -538,7 +566,7 @@ public:
 
         ++branches_count;
 
-        if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj_value))
+        if (EpsValue(solution.upper_bound) <= static_cast<double>(best_obj_value + 1))
             return;
 
         if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
@@ -559,7 +587,21 @@ public:
     void BnB(const std::set<uint32_t>& heuristic_clique)
     {
         auto initial_solution = Solve();
-        std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl << std::endl;
+        std::cout << "Initial solution: " << initial_solution.upper_bound << std::endl;
+        std::cout << "Heuristic solution: " << heuristic_clique.size() << std::endl << std::endl;
+
+        if (static_cast<uint32_t>(initial_solution.upper_bound) + 1 >
+            static_cast<uint32_t>(1.2 * double(heuristic_clique.size())))
+        {
+            std::cout << "Too bad, try to add more constrains..." << std::endl;
+            if (model.AddHeuristicConstrains(static_cast<uint32_t>(initial_solution.upper_bound) + 1))
+            {
+                initial_solution = Solve();
+                std::cout << "Seconditional solution: " << initial_solution.upper_bound << std::endl << std::endl;
+            }
+        }
+
+        return;
 
         if (initial_solution.integer_count < heuristic_clique.size())
         {
