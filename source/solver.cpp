@@ -661,10 +661,12 @@ private:
     std::vector<std::thread> execution_threads;
 };
 
-void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique, Graph::ColorizationType strategy)
+bool Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique, Graph::ColorizationType strategy)
 {
     auto color_data = graph.Colorize(strategy);
     auto higher_color = *color_data.rbegin();
+    if (color_data.size() == 1)
+        return false;
 
     auto min_degree_vert = higher_color.second[0];
     auto min_degree = graph.GetDegree(higher_color.second[0]);
@@ -680,20 +682,28 @@ void Heuristic(const Graph& graph, std::set<uint32_t>& curr_clique, Graph::Color
     }
 
     curr_clique.emplace(min_degree_vert);
-    if (graph.GetDegree(min_degree_vert) <= 1)
+    if (!Heuristic(graph.GetSubGraph(min_degree_vert), curr_clique, strategy))
     {
         for (uint32_t i = 0; i < graph.GetSize(); ++i)
         {
-            if (graph.HasEdge(i, min_degree_vert))
+            bool is_clique_i = true;
+            for (auto v : curr_clique)
             {
-                curr_clique.emplace(i);
-                return;
+                if (!graph.HasEdge(i, min_degree_vert))
+                {
+                    is_clique_i = false;
+                    break;
+                }
             }
+
+            if (!is_clique_i)
+                continue;
+
+            curr_clique.emplace(i);
+            return true;
         }
-        assert(false);
-        return;
     }
-    Heuristic(graph.GetSubGraph(min_degree_vert), curr_clique, strategy);
+    return true;
 }
 
 std::set<uint32_t> Heuristic(const Graph& graph)
