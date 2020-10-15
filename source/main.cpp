@@ -9,6 +9,8 @@
 
 void Test(const std::string& file_path, const std::string& path)
 {
+    std::cout << "Test graph: " << path << std::endl;
+
     uint64_t int_elapsed = 0;
     uint64_t bnb_elapsed = 0;
     std::string test_result = "CRASHED";

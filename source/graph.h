@@ -18,6 +18,27 @@ std::set<T> operator*(const std::set<T>& A, const std::set<T>& B)
     return res;
 }
 
+template <class  T, class U>
+std::set<T, U> operator*(const std::set<T, U>& A, const std::set<T, U>& B)
+{
+    std::set<T, U> res;
+
+    std::set_intersection(A.begin(), A.end(), B.begin(), B.end(),
+        inserter(res, res.begin()));
+
+    return res;
+}
+
+template <class T>
+std::set<T>& operator+=(std::set<T>& A, const std::set<T>& B)
+{
+    // A.insert(B.begin(), B.end());
+    for (typename std::set<T>::const_iterator p = B.begin(); p != B.end(); p++)
+        A.insert(*p);
+
+    return A;
+}
+
 struct Graph
 {
     using ColorToVerts = std::map<uint32_t, std::vector<uint32_t>>;
@@ -92,6 +113,69 @@ struct Graph
     }
 
     std::vector<uint32_t> GetOrderedNodes(ColorizationType type) const;
+
+    std::set<std::set<uint32_t>> GetHeuristicConstr(ColorizationType type) const
+    {
+        auto ordered_nodes = GetOrderedNodes(type);
+        std::vector<uint32_t> nodes_order(m_graph.size());
+        uint32_t order = 0;
+        for (auto node : ordered_nodes)
+            nodes_order[node] = order++;
+
+        struct Node
+        {
+            uint32_t val = 0;
+            const std::vector<uint32_t>& order;
+
+            bool operator<(const Node& r) const
+            {
+                return std::tie(order[val], val) < std::tie(order[r.val], r.val);
+            }
+        };
+
+        std::vector<std::set<Node>> m_non_adj;
+        m_non_adj.resize(m_graph.size());
+        for (uint32_t i = 0; i < m_graph.size(); ++i)
+        {
+            for (uint32_t j = 0; j < m_graph.size(); ++j)
+            {
+                if (i == j || m_graph[i][j])
+                    continue;
+
+                m_non_adj[i].emplace(Node{ j, nodes_order });
+                m_non_adj[j].emplace(Node{ i, nodes_order });
+            }
+        }
+
+        std::set<Node> nodes;
+        for (uint32_t i = 0; i < m_graph.size(); ++i)
+            nodes.emplace(Node{ i, nodes_order });
+
+        std::set<std::set<uint32_t>> res;
+        while (!nodes.empty())
+        {
+            std::set<Node> constr;
+            constr.emplace(Node{ nodes.begin()->val, nodes_order });
+            auto t = m_non_adj[nodes.begin()->val];
+            nodes.erase(nodes.begin());
+            while (!t.empty())
+            {
+                auto first = t.begin()->val;
+                t = t * m_non_adj[first];
+                constr.emplace(Node{ first, nodes_order });
+            }
+
+            if (constr.size() < 4)
+                continue;
+
+            std::set<uint32_t> converted;
+            for (const auto& node : constr)
+                converted.emplace(node.val);
+
+            res.emplace(converted);
+        }
+        return res;
+    }
 
 private:
     std::vector<std::vector<bool>> m_graph;

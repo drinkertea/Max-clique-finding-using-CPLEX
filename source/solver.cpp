@@ -91,6 +91,12 @@ struct ModelData
         , m_model(m_env)
         , m_variables(m_env, m_size)
     {
+        m_sum_vert_less_one += m_graph.GetHeuristicConstr(Graph::ColorizationType::default);
+        m_sum_vert_less_one += m_graph.GetHeuristicConstr(Graph::ColorizationType::maxdegree);
+        m_sum_vert_less_one += m_graph.GetHeuristicConstr(Graph::ColorizationType::mindegree);
+        m_sum_vert_less_one += m_graph.GetHeuristicConstr(Graph::ColorizationType::random);
+        m_sum_vert_less_one += m_graph.GetHeuristicConstr(Graph::ColorizationType::maxdegree_random);
+        m_sum_vert_less_one += m_graph.GetHeuristicConstr(Graph::ColorizationType::mindegree_random);
         AddNonEdgePairs();
         AddIndependetConst(Graph::ColorizationType::default);
         AddIndependetConst(Graph::ColorizationType::maxdegree);
