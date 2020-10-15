@@ -601,8 +601,6 @@ public:
             }
         }
 
-        return;
-
         if (initial_solution.integer_count < heuristic_clique.size())
         {
             initial_solution.branching_index = SelectBranch(initial_solution.variables);
