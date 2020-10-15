@@ -1,5 +1,6 @@
 #include "graph.h"
 #include "solver.h"
+#include "utils.hpp"
 
 #include <iostream>
 #include <algorithm>
@@ -21,24 +22,14 @@ void Test(const std::string& file_path, const std::string& path)
     {
         Graph g(path);
 
-        auto int_start = std::chrono::system_clock::now();
+        Timer timer;
+        TimeoutThread break_timer(std::chrono::seconds(7200));
         std::vector<uint32_t> int_result = cf.FindMaxCliqueInteger(g);
-        auto int_end = std::chrono::system_clock::now();
-        int_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(int_end - int_start).count();
+        int_elapsed = timer.Stop();
 
-        std::thread timer_thread([&cf]() {
-            using namespace std::chrono_literals;
-            std::this_thread::sleep_for(7200s);
-            cf.stop = true;
-        });
-
-        auto bnb_start = std::chrono::system_clock::now();
+        timer.Reset();
         auto bnb_result = cf.FindMaxCliqueBnB(g);
-        auto bnb_end = std::chrono::system_clock::now();
-        bnb_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(bnb_end - bnb_start).count();
-
-        TerminateThread(timer_thread.native_handle(), 0);
-        timer_thread.join();
+        bnb_elapsed = timer.Stop();
 
         test_result = int_result.size() == bnb_result.size() ? "PASSED" : "FAILED";
         if (cf.stop)

@@ -86,6 +86,11 @@ struct Graph
         return m_adj[vertex].size();
     }
 
+    const std::set<uint32_t>& GetNeighbors(uint32_t vertex) const
+    {
+        return m_adj[vertex];
+    }
+
     Graph GetSubGraph(uint32_t vertex) const
     {
         Graph sub(m_graph.size());
