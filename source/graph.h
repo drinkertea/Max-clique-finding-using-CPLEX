@@ -6,6 +6,7 @@
 #include <set>
 #include <map>
 #include <algorithm>
+#include <numeric>
 
 template <class  T>
 std::set<T> operator*(const std::set<T>& A, const std::set<T>& B)
@@ -76,6 +77,22 @@ struct Graph
         return true;
     }
 
+    std::set<std::set<uint32_t>> CheckSolution(const std::set<uint32_t>& verts) const
+    {
+        std::set<std::set<uint32_t>> res;
+        for (auto v : verts)
+        {
+            for (auto v1 : verts)
+            {
+                if (v != v1 && !HasEdge(v, v1))
+                {
+                    res.emplace(std::set<uint32_t>{ v, v1 });
+                }
+            }
+        }
+        return res;
+    }
+
     size_t GetSize() const
     {
         return m_graph.size();
@@ -119,9 +136,23 @@ struct Graph
 
     std::vector<uint32_t> GetOrderedNodes(ColorizationType type) const;
 
+    std::set<std::set<uint32_t>> GetHeuristicConstr(const std::vector<double>& weights) const
+    {
+        std::vector<uint32_t> nodes(m_graph.size(), 0);
+        std::iota(nodes.begin(), nodes.end(), 0);
+        std::sort(nodes.begin(), nodes.end(), [&weights](const auto& l, const auto& r) {
+            return weights[l] > weights[r];
+        });
+        return GetHeuristicConstr(nodes);
+    }
+
     std::set<std::set<uint32_t>> GetHeuristicConstr(ColorizationType type) const
     {
-        auto ordered_nodes = GetOrderedNodes(type);
+        return GetHeuristicConstr(GetOrderedNodes(type));
+    }
+
+    std::set<std::set<uint32_t>> GetHeuristicConstr(const std::vector<uint32_t>& ordered_nodes) const
+    {
         std::vector<uint32_t> nodes_order(m_graph.size());
         uint32_t order = 0;
         for (auto node : ordered_nodes)

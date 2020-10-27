@@ -59,14 +59,18 @@ struct ThreadsAccumulator
 
     void OnBestSolution(const Solution& solution)
     {
-        auto clique = ExtractClique(solution.variables);
+        OnBestSolution(ExtractClique(solution.variables));
+    }
+
+    void OnBestSolution(const std::set<uint32_t>& clique)
+    {
         {
             std::lock_guard<std::mutex> lg(solutions_mutex);
-            solutions.emplace_back(solution);
+            solutions.emplace_back(clique);
         }
 
         std::stringstream ss;
-        ss << "Found " << solution.integer_count << " " << std::endl;
+        ss << "Found " << clique.size() << " " << std::endl;
 
         for (auto v : clique)
             ss << v << " ";
@@ -101,12 +105,12 @@ struct ThreadsAccumulator
         std::cout << str << std::endl;
     }
 
-    Solution GetBestSolution() const
+    std::set<uint32_t> GetBestSolution() const
     {
-        Solution best{};
+        std::set<uint32_t> best;
         for (const auto& solution : solutions)
         {
-            if (solution.integer_count <= best.integer_count)
+            if (solution.size() <= best.size())
                 continue;
 
             best = solution;
@@ -118,7 +122,7 @@ private:
     std::atomic<size_t> finished_index = 0;
     std::atomic<size_t> tasks_total = 0;
 
-    std::vector<Solution> solutions;
+    std::vector<std::set<uint32_t>> solutions;
     std::mutex            solutions_mutex;
 
     std::mutex print_mutex;

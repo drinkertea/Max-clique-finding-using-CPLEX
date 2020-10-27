@@ -2,14 +2,15 @@
 #include "heuristic.hpp"
 #include "model.hpp"
 
-class BnBHelper
+class BnCHelper
 {
-    std::atomic_bool&      stop;
     std::atomic<uint64_t>& best_obj_value;
     ModelData&             model;
     ThreadsAccumulator&    accumulator;
-    BranchingStateTracker* branching_state_tracker = nullptr;
     uint64_t               branches_count = 0;
+    const Graph&           graph;
+
+    std::vector<std::unique_ptr<ConstrainsGuard>> additional_constrains;
 
     struct BranchingData
     {
@@ -18,25 +19,10 @@ class BnBHelper
     };
     using Branches = std::pair<BranchingData, BranchingData>;
 
-    void Branching(const BranchingData& way, size_t vertex)
+    void Branching(BranchingData& way, size_t vertex)
     {
         auto guard = model.AddScopedConstrains(vertex, way.way, way.way);
-        BnB(way.res);
-    }
-
-    void Branching(BranchingStateTracker& callback, const BranchingData& way, size_t vertex)
-    {
-        auto guard = callback.OnBranch(way.res, vertex, way.way);
-        if (guard.stop)
-            return;
-        Branching(way, vertex);
-    }
-
-    void Branching(BranchingStateTracker* callback, const BranchingData& way, size_t vertex)
-    {
-        if (callback)
-            return Branching(*callback, way, vertex);
-        Branching(way, vertex);
+        BnC();
     }
 
     Branches GetWays(size_t branch_index)
@@ -87,8 +73,6 @@ class BnBHelper
         Solution res{};
 
         IloCplex cplex = model.CreateSolver();
-        if (!branching_state_tracker)
-            cplex.setParam(IloCplex::Param::Threads, 1);
         if (!cplex.solve())
             return res;
 
@@ -105,13 +89,95 @@ class BnBHelper
         return res;
     }
 
+    void OnBestSolution(const Solution& solution)
+    {
+        best_obj_value = static_cast<uint64_t>(solution.integer_count);
+        accumulator.OnBestSolution(solution);
+    }
+
+    bool Separation(const Solution& solution)
+    {
+        auto weights = solution.variables;
+        for (auto& w : weights)
+        {
+            if (EpsValue(w) == 1.0)
+                w = 0.0;
+        }
+        auto heur_constrs = graph.GetHeuristicConstr(weights);
+        std::map<double, std::vector<std::set<uint32_t>>> constr_by_weigh;
+        for (auto& constr : heur_constrs)
+        {
+            double sum = 0.0;
+            for (auto vertex : constr)
+                sum += solution.variables[vertex];
+            if (EpsValue(sum) <= 1.0)
+                continue;
+
+            constr_by_weigh[sum].push_back(std::move(constr));
+        };
+
+        constexpr uint32_t max_count = 10;
+        uint32_t cnt = 0;
+        for (auto it = constr_by_weigh.rbegin(); it != constr_by_weigh.rend(); ++it)
+        {
+            for (const auto& constr : it->second)
+            {
+                additional_constrains.emplace_back(model.AddScopedConstrain(constr));
+                if (++cnt >= max_count)
+                    break;
+            }
+            if (cnt >= max_count)
+                break;
+        }
+
+        return cnt >= max_count;
+    }
+
+    void BnC()
+    {
+        Solution solution = Solve();
+        ++branches_count;
+
+        if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
+            return;
+
+        while (Separation(solution))
+        {
+            solution = Solve();
+            if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
+                return;
+        }
+
+        if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
+            OnBestSolution(solution);
+
+        size_t branch_index = solution.branching_index;
+        if (branch_index == g_invalid_index)
+        {
+            auto non_edge_pairs = graph.CheckSolution(ExtractClique(solution.variables));
+            if (non_edge_pairs.empty())
+            {
+                OnBestSolution(solution);
+                return;
+            }
+
+            for (const auto& constr : non_edge_pairs)
+                additional_constrains.emplace_back(model.AddScopedConstrain(constr));
+
+            BnC();
+        }
+
+        auto ways = GetWays(branch_index);
+        Branching(ways.first, branch_index);
+        Branching(ways.second, branch_index);
+    }
+
 public:
-    BnBHelper(ModelData& m, ThreadsAccumulator& p, std::atomic<uint64_t>& best, std::atomic_bool& stop, BranchingStateTracker* callback = nullptr)
+    BnCHelper(ModelData& m, ThreadsAccumulator& p, std::atomic<uint64_t>& best, const Graph& graph)
         : model(m)
         , accumulator(p)
-        , branching_state_tracker(callback)
         , best_obj_value(best)
-        , stop(stop)
+        , graph(graph)
     {
     };
 
@@ -120,32 +186,7 @@ public:
         return branches_count;
     }
 
-    void BnB(const Solution& solution)
-    {
-        if (stop)
-            return;
-
-        ++branches_count;
-
-        if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
-            return;
-
-        if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
-        {
-            best_obj_value = static_cast<uint64_t>(solution.integer_count);
-            accumulator.OnBestSolution(solution);
-        }
-
-        size_t branch_index = solution.branching_index;
-        if (branch_index == g_invalid_index)
-            return;
-
-        auto ways = GetWays(branch_index);
-        Branching(branching_state_tracker, ways.first, branch_index);
-        Branching(branching_state_tracker, ways.second, branch_index);
-    }
-
-    void BnB(const std::set<uint32_t>& heuristic_clique)
+    void BnC(const std::set<uint32_t>& heuristic_clique)
     {
         Timer timer;
         auto initial_solution = Solve();
@@ -156,14 +197,16 @@ public:
         if (initial_solution.integer_count < heuristic_clique.size())
         {
             initial_solution.branching_index = SelectBranch(initial_solution.variables);
-
+            for (auto& x : initial_solution.variables)
+                x = 0.0;
             for (auto vert : heuristic_clique)
                 initial_solution.variables[vert] = 1.0;
             initial_solution.upper_bound = static_cast<double>(heuristic_clique.size());
             initial_solution.integer_count = static_cast<uint64_t>(heuristic_clique.size());
+            OnBestSolution(initial_solution);
         }
 
-        BnB(initial_solution);
+        BnC();
     }
 };
 
@@ -173,39 +216,13 @@ std::vector<uint32_t> CliqueFinder::FindMaxCliqueBnB(const Graph& graph)
     ThreadsAccumulator    accumulator(graph);
     BranchingStateTracker branching_state_tracker(graph.GetSize());
     std::atomic<uint64_t> best_obj_value = 1;
-    BnBHelper             bnb_helper(model, accumulator, best_obj_value, stop, &branching_state_tracker);
+    BnCHelper             bnc_helper(model, accumulator, best_obj_value, graph);
 
-    bnb_helper.BnB(Heuristic(graph));
+    bnc_helper.BnC(Heuristic(graph));
 
-    ParallelExecturor::Tasks tasks;
-    std::atomic<uint64_t>    total_branches = bnb_helper.GetBranchCount();
-    for (const auto& first_branches : branching_state_tracker.GetBranches())
-    {
-        const auto& path = first_branches.first;
-        const auto& solution = first_branches.second;
-        tasks.push_back([this, path, solution, &model, &accumulator, &total_branches, &best_obj_value]() {
-            ModelData copy_model(model);
+    std::cout << "Total branches: " << bnc_helper.GetBranchCount() << std::endl << std::endl;
 
-            std::vector<std::unique_ptr<ConstrainsGuard>> path_constr;
-            for (const auto& branch : path)
-                path_constr.push_back(copy_model.AddScopedConstrainsPtr(branch.first, branch.second, branch.second));
-
-            auto helper = std::make_shared<BnBHelper>(copy_model, accumulator, best_obj_value, stop);
-            helper->BnB(solution);
-
-            accumulator.OnTaskComplete(path);
-            total_branches += helper->GetBranchCount();
-        });
-    }
-    accumulator.ProgressBegin(tasks.size());
-
-    ParallelExecturor executor(std::move(tasks));
-    executor.WaitForJobDone();
-
-    std::cout << "Total branches: " << total_branches << std::endl << std::endl;
-    branch_count = total_branches;
-
-    auto max_clique = ExtractClique(accumulator.GetBestSolution().variables);
+    auto max_clique = accumulator.GetBestSolution();
     return { max_clique.begin(), max_clique.end() };
 }
 

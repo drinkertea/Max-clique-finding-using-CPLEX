@@ -6,6 +6,7 @@ struct ModelData;
 struct ConstrainsGuard
 {
     ConstrainsGuard(ModelData& model, size_t variable_index, IloNum lowerBound, IloNum upperBound);
+    ConstrainsGuard(ModelData& model, const std::set<uint32_t>& constr);
     ~ConstrainsGuard();
 
 private:
@@ -36,7 +37,7 @@ struct ModelData
             }
         }
 
-        AddNonEdgePairs();
+        //AddNonEdgePairs();
         InitModel(m_sum_vert_less_one);
     }
 
@@ -70,6 +71,11 @@ struct ModelData
     std::unique_ptr<ConstrainsGuard> AddScopedConstrainsPtr(size_t variable_index, IloNum lowerBound, IloNum upperBound)
     {
         return std::make_unique<ConstrainsGuard>(*this, variable_index, lowerBound, upperBound);
+    }
+
+    std::unique_ptr<ConstrainsGuard> AddScopedConstrain(const std::set<uint32_t>& constr)
+    {
+        return std::make_unique<ConstrainsGuard>(*this, constr);
     }
 
     double ExtractValue(const IloCplex& cplex, size_t variable_index) const
@@ -195,6 +201,16 @@ ConstrainsGuard::ConstrainsGuard(ModelData& model, size_t variable_index, IloNum
     std::string name = std::to_string(lowerBound) + " <= y[" + std::to_string(variable_index) + "] <= " + std::to_string(upperBound);
     m_expr += m_model.m_variables[variable_index];
     m_constrain = IloRange(m_model.m_env, lowerBound, m_expr, upperBound, name.c_str());
+    m_constrains = m_model.m_model.add(m_constrain);
+}
+
+ConstrainsGuard::ConstrainsGuard(ModelData& model, const std::set<uint32_t>& constr)
+    : m_model(model)
+    , m_expr(m_model.m_env)
+{
+    for (auto index : constr)
+        m_expr += m_model.m_variables[index];
+    m_constrain = IloRange(m_model.m_env, 0.0, m_expr, 1.0);
     m_constrains = m_model.m_model.add(m_constrain);
 }
 

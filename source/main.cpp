@@ -24,7 +24,7 @@ void Test(const std::string& file_path, const std::string& path)
 
         Timer timer;
         TimeoutThread break_timer(std::chrono::seconds(7200));
-        std::vector<uint32_t> int_result = cf.FindMaxCliqueInteger(g);
+        std::vector<uint32_t> int_result = {};// cf.FindMaxCliqueInteger(g);
         int_elapsed = timer.Stop();
 
         timer.Reset();
