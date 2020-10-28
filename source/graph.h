@@ -40,6 +40,17 @@ std::set<T>& operator+=(std::set<T>& A, const std::set<T>& B)
     return A;
 }
 
+struct HeuristicConstrain
+{
+    double weight = 0.0;
+    std::set<uint32_t> nodes;
+
+    bool operator<(const HeuristicConstrain& r) const
+    {
+        return std::tie(weight, nodes) > std::tie(r.weight, r.nodes);
+    }
+};
+
 struct Graph
 {
     using ColorToVerts = std::map<uint32_t, std::vector<uint32_t>>;
@@ -103,6 +114,11 @@ struct Graph
         return m_adj[vertex].size();
     }
 
+    const std::vector<int>& GetAdj(uint32_t vertex) const
+    {
+        return m_adj_vec[vertex];
+    }
+
     const std::set<uint32_t>& GetNeighbors(uint32_t vertex) const
     {
         return m_adj[vertex];
@@ -134,17 +150,12 @@ struct Graph
         return m_graph[i][j];
     }
 
+    std::set<HeuristicConstrain> GetHMIS(const std::vector<double>& weights) const;
+
     std::vector<uint32_t> GetOrderedNodes(ColorizationType type) const;
 
-    std::set<std::set<uint32_t>> GetHeuristicConstr(const std::vector<double>& weights) const
-    {
-        std::vector<uint32_t> nodes(m_graph.size(), 0);
-        std::iota(nodes.begin(), nodes.end(), 0);
-        std::sort(nodes.begin(), nodes.end(), [&weights](const auto& l, const auto& r) {
-            return weights[l] > weights[r];
-        });
-        return GetHeuristicConstr(nodes);
-    }
+    std::set<HeuristicConstrain> GetWeightHeuristicConstr(const std::vector<double>& weights) const;
+    std::set<HeuristicConstrain> GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights) const;
 
     std::set<std::set<uint32_t>> GetHeuristicConstr(ColorizationType type) const
     {
@@ -216,4 +227,6 @@ struct Graph
 private:
     std::vector<std::vector<bool>> m_graph;
     std::vector<std::set<uint32_t>> m_adj;
+    std::vector<std::vector<int>> m_adj_vec;
+    std::vector<std::set<uint32_t>> m_non_adj;
 };

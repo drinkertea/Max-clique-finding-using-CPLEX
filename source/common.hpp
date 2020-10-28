@@ -29,7 +29,7 @@ constexpr auto g_strategies = {
 
 static double EpsValue(double x)
 {
-    constexpr double eps = 1e8;
+    constexpr double eps = 1e5;
     return std::round(x * eps) / eps;
 }
 

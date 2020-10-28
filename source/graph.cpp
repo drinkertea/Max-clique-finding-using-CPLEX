@@ -4,6 +4,8 @@
 #include <random>
 #include <numeric>
 #include "graph.h"
+#include "common.hpp"
+#include "solution.h"
 
 Graph::Graph(const std::string& path)
 {
@@ -32,6 +34,7 @@ Graph::Graph(const std::string& path)
                 continue;
 
             m_graph.resize(vertex_count, std::vector<bool>(vertex_count, false));
+            m_adj_vec.resize(vertex_count);
             m_adj.resize(vertex_count);
         }
         else if (type == 'e')
@@ -49,10 +52,26 @@ Graph::Graph(const std::string& path)
 
             m_adj[a - 1u].emplace(b - 1u);
             m_adj[b - 1u].emplace(a - 1u);
+
+            m_adj_vec[a - 1u].emplace_back(b - 1u);
+            m_adj_vec[b - 1u].emplace_back(a - 1u);
         }
         else
         {
             throw std::runtime_error("Invalid file format!");
+        }
+    }
+
+    m_non_adj.resize(m_graph.size());
+    for (uint32_t i = 0; i < m_graph.size(); ++i)
+    {
+        for (uint32_t j = 0; j < m_graph.size(); ++j)
+        {
+            if (i == j || m_graph[i][j])
+                continue;
+
+            m_non_adj[i].emplace(j);
+            m_non_adj[j].emplace(i);
         }
     }
 }
@@ -89,6 +108,58 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
     }
 
     return result;
+}
+
+HeuristicConstrain Extract(const std::vector<int>& is, const std::vector<double>& weights)
+{
+    HeuristicConstrain res{};
+    for (auto x : is)
+    {
+        res.nodes.emplace(x);
+        res.weight += weights[x];
+    }
+    return res;
+}
+
+std::set<HeuristicConstrain> Graph::GetHMIS(const std::vector<double>& weights) const
+{
+    std::vector<int> weights_int;
+    for (auto x : weights)
+        weights_int.emplace_back(int(x * 10000));
+
+    SolutionMIS s(this, weights_int);
+    while (!s.isMaximal()) {
+        s.addRandomVertex();
+        assert(s.integrityCheck());
+    }
+
+    do {
+        while (!s.isMaximal()) {
+            s.addRandomVertex();
+        }
+    } while (s.omegaImprovement() || s.twoImprovement() || s.threeImprovement());
+
+    int k = 200;
+    std::set<HeuristicConstrain> solutions;
+    solutions.emplace(Extract(s.i_set(), weights));
+    while (k-- > 0)
+    {
+        SolutionMIS next_s(s);
+
+        next_s.force(2);
+
+        assert(next_s.integrityCheck());
+
+        do {
+            while (!next_s.isMaximal()) {
+                next_s.addRandomVertex();
+            }
+        } while (next_s.omegaImprovement() || next_s.twoImprovement() || s.threeImprovement());
+
+        solutions.emplace(Extract(next_s.i_set(), weights));
+    }
+
+    return solutions;
 }
 
 std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
@@ -136,4 +207,108 @@ std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
     }
 
     return nodes;
+}
+
+std::set<HeuristicConstrain> Graph::GetWeightHeuristicConstr(const std::vector<double>& weights) const
+{
+    struct WeightNode
+    {
+        uint32_t label = 0;
+        double   weight = 0.0;
+
+        bool operator<(const WeightNode& r) const
+        {
+            return std::tie(weight, label) > std::tie(r.weight, r.label);
+        }
+    };
+
+    std::vector<std::set<WeightNode>> non_adj_sorted(m_graph.size());
+    std::set<WeightNode> nodes;
+    for (uint32_t i = 0; i < m_graph.size(); ++i)
+    {
+        nodes.emplace(WeightNode{ i, weights[i] });
+        for (auto j : m_non_adj[i])
+        {
+            non_adj_sorted[i].emplace(WeightNode{ j, weights[j] });
+            non_adj_sorted[j].emplace(WeightNode{ i, weights[i] });
+        }
+    }
+
+    std::set<HeuristicConstrain> result;
+    while (!nodes.empty())
+    {
+        auto t = non_adj_sorted[nodes.begin()->label];
+        nodes.erase(nodes.begin());
+
+        HeuristicConstrain constr{};
+        while (!t.empty())
+        {
+            auto node = t.begin()->label;
+            auto weight = t.begin()->weight;
+
+            t = t * non_adj_sorted[node];
+
+            constr.weight += weight;
+            constr.nodes.emplace(node);
+        }
+
+        if (EpsValue(constr.weight) <= 1.0)
+            continue;
+
+        result.emplace(std::move(constr));
+    }
+    return result;
+}
+
+std::set<HeuristicConstrain> Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights) const
+{
+    struct WeightNode
+    {
+        uint32_t label = 0;
+        double   weight = 0.0;
+
+        bool operator<(const WeightNode& r) const
+        {
+            return std::tie(weight, label) > std::tie(r.weight, r.label);
+        }
+    };
+
+    std::vector<std::set<WeightNode>> non_adj_sorted(m_graph.size());
+    for (uint32_t i = 0; i < m_graph.size(); ++i)
+    {
+        for (auto j : m_non_adj[i])
+        {
+            non_adj_sorted[i].emplace(WeightNode{ j, weights[j] });
+            non_adj_sorted[j].emplace(WeightNode{ i, weights[i] });
+        }
+    }
+    std::set<WeightNode> nodes = non_adj_sorted[start];
+    std::set<HeuristicConstrain> result;
+
+    HeuristicConstrain base_constr{ weights[start], { start } };
+
+    while (!nodes.empty())
+    {
+        auto t = non_adj_sorted[start] * non_adj_sorted[nodes.begin()->label];
+        nodes.erase(nodes.begin());
+
+        HeuristicConstrain constr = base_constr;
+        while (!t.empty())
+        {
+            auto node = t.begin()->label;
+            auto weight = t.begin()->weight;
+
+            t = t * non_adj_sorted[node];
+
+            constr.weight += weight;
+            constr.nodes.emplace(node);
+        }
+
+        if (EpsValue(constr.weight) <= 1.0)
+            continue;
+
+        result.emplace(std::move(constr));
+    }
+
+    return result;
 }

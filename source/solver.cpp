@@ -9,8 +9,19 @@ class BnCHelper
     ThreadsAccumulator&    accumulator;
     uint64_t               branches_count = 0;
     const Graph&           graph;
+    uint32_t               depth = 0;
+    double                 avg = 0;
+    uint32_t               cnt = 0;
 
-    std::vector<std::unique_ptr<ConstrainsGuard>> additional_constrains;
+    std::vector<uint32_t> vars_stats;
+
+    struct IndependetConstrain
+    {
+        std::set<uint32_t> nodes;
+        std::unique_ptr<ConstrainsGuard> constrain;
+    };
+
+    std::vector<IndependetConstrain> additional_constrains;
 
     struct BranchingData
     {
@@ -21,35 +32,37 @@ class BnCHelper
 
     void Branching(BranchingData& way, size_t vertex)
     {
+        ++depth;
         auto guard = model.AddScopedConstrains(vertex, way.way, way.way);
         BnC();
+        --depth;
     }
 
     Branches GetWays(size_t branch_index)
     {
-        Branches ways = { { 1.0 }, { 0.0 } };
-        {
-            auto guard = model.AddScopedConstrains(branch_index, ways.first.way, ways.first.way);
-            ways.first.res = Solve();
-        }
-        {
-            auto guard = model.AddScopedConstrains(branch_index, ways.second.way, ways.second.way);
-            ways.second.res = Solve();
-        }
-
-        bool go_right = ways.first.res.integer_count > ways.second.res.integer_count;
-        if (ways.first.res.integer_count == ways.second.res.integer_count)
-            go_right = ways.first.res.upper_bound > ways.second.res.upper_bound;
-
-        if (!go_right)
-            std::swap(ways.first, ways.second);
-
+        Branches ways = { { 0.0 }, { 1.0 } };
+        //{
+        //    auto guard = model.AddScopedConstrains(branch_index, ways.first.way, ways.first.way);
+        //    ways.first.res = Solve();
+        //}
+        //{
+        //    auto guard = model.AddScopedConstrains(branch_index, ways.second.way, ways.second.way);
+        //    ways.second.res = Solve();
+        //}
+        //
+        //bool go_right = ways.first.res.integer_count > ways.second.res.integer_count;
+        //if (ways.first.res.integer_count == ways.second.res.integer_count)
+        //    go_right = ways.first.res.upper_bound > ways.second.res.upper_bound;
+        //
+        //if (!go_right)
+        //    std::swap(ways.first, ways.second);
+        //
         return ways;
     }
 
     size_t SelectBranch(const std::vector<double>& vars) const
     {
-        double min = std::numeric_limits<double>::max();
+        double max = 0;
         size_t res = g_invalid_index;
 
         for (size_t i = 0; i < vars.size(); ++i)
@@ -58,10 +71,10 @@ class BnCHelper
             if (IsInteger(val))
                 continue;
 
-            if (val >= min)
+            if (val <= max)
                 continue;
 
-            min = val;
+            max = val;
             res = i;
         }
 
@@ -97,40 +110,44 @@ class BnCHelper
 
     bool Separation(const Solution& solution)
     {
-        auto weights = solution.variables;
-        for (auto& w : weights)
-        {
-            if (EpsValue(w) == 1.0)
-                w = 0.0;
-        }
-        auto heur_constrs = graph.GetHeuristicConstr(weights);
-        std::map<double, std::vector<std::set<uint32_t>>> constr_by_weigh;
+        auto heur_constrs = graph.GetHMIS(solution.variables);
+        //auto heur_constrs = graph.GetWeightHeuristicConstrFor(solution.branching_index, solution.variables);
         for (auto& constr : heur_constrs)
         {
-            double sum = 0.0;
-            for (auto vertex : constr)
-                sum += solution.variables[vertex];
-            if (EpsValue(sum) <= 1.0)
-                continue;
+            for (auto v : constr.nodes)
+                ++vars_stats[v];
 
-            constr_by_weigh[sum].push_back(std::move(constr));
-        };
-
-        constexpr uint32_t max_count = 10;
-        uint32_t cnt = 0;
-        for (auto it = constr_by_weigh.rbegin(); it != constr_by_weigh.rend(); ++it)
-        {
-            for (const auto& constr : it->second)
-            {
-                additional_constrains.emplace_back(model.AddScopedConstrain(constr));
-                if (++cnt >= max_count)
-                    break;
-            }
-            if (cnt >= max_count)
-                break;
+            additional_constrains.emplace_back();
+            additional_constrains.back().constrain = model.AddScopedConstrain(constr.nodes);
+            additional_constrains.back().nodes = constr.nodes;
         }
 
-        return cnt >= max_count;
+        return !heur_constrs.empty();
+    }
+
+    void CleanUp(const Solution& solution)
+    {
+        //std::erase_if(additional_constrains, [&solution](const IndependetConstrain& constr) {
+        //    double sum = 0;
+        //    for (auto x : constr.nodes)
+        //        sum += solution.variables[x];
+        //
+        //    return EpsValue(sum) < 0.5;
+        //});
+    }
+
+    void MoveAppend(std::vector<IndependetConstrain>& src, std::vector<IndependetConstrain>& dst)
+    {
+        if (dst.empty())
+        {
+            dst = std::move(src);
+        }
+        else
+        {
+            dst.reserve(dst.size() + src.size());
+            std::move(std::begin(src), std::end(src), std::back_inserter(dst));
+            src.clear();
+        }
     }
 
     void BnC()
@@ -141,15 +158,63 @@ class BnCHelper
         if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
             return;
 
-        while (Separation(solution))
+        std::deque<double> sols;
+        Timer timer_total;
+        while (true)
         {
+            Timer timer;
+            auto heur_constrs = graph.GetWeightHeuristicConstr(solution.variables);
+            //auto heur_constrs = graph.GetHMIS(solution.variables);
+            auto elapsed = timer.Stop();
+            if (cnt++ == 0)
+            {
+                avg = double(elapsed);
+            }
+            else
+            {
+                avg += (1.0 / (double(cnt))) * (double(elapsed) - avg);
+            }
+
+            if (heur_constrs.empty())
+                break;
+
+            sols.emplace_back(solution.upper_bound);
+            if (sols.size() > 10)
+            {
+                sols.pop_front();
+                if (sols.front() - sols.back() < 0.1)
+                    break;
+            }
+
+            std::vector<IndependetConstrain> additional_constrains_t;
+            for (auto& constr : heur_constrs)
+            {
+                additional_constrains_t.emplace_back();
+                additional_constrains_t.back().constrain = model.AddScopedConstrain(constr.nodes);
+                additional_constrains_t.back().nodes = constr.nodes;
+            }
+
             solution = Solve();
+
+            std::erase_if(additional_constrains_t, [&solution](const IndependetConstrain& constr) {
+                double sum = 0;
+                for (auto x : constr.nodes)
+                    sum += solution.variables[x];
+
+                return EpsValue(sum) < 1.0;
+            });
+
+            MoveAppend(additional_constrains_t, additional_constrains);
+
+            if (sols.back() - solution.upper_bound < 0.001)
+                break;
+
             if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
                 return;
         }
+        CleanUp(solution);
 
-        if (IsInteger(solution.upper_bound) && solution.integer_count >= best_obj_value)
-            OnBestSolution(solution);
+        std::cout << depth << " " << EpsValue(solution.upper_bound) << " " << EpsValue(avg) << " " << timer_total.Stop() << std::endl;
 
         size_t branch_index = solution.branching_index;
         if (branch_index == g_invalid_index)
@@ -157,14 +222,21 @@ class BnCHelper
             auto non_edge_pairs = graph.CheckSolution(ExtractClique(solution.variables));
             if (non_edge_pairs.empty())
             {
-                OnBestSolution(solution);
-                return;
+                if (solution.integer_count >= best_obj_value)
+                    OnBestSolution(solution);
             }
+            else
+            {
+                for (auto& constr : non_edge_pairs)
+                {
+                    additional_constrains.emplace_back();
+                    additional_constrains.back().constrain = model.AddScopedConstrain(constr);
+                    additional_constrains.back().nodes = constr;
+                }
 
-            for (const auto& constr : non_edge_pairs)
-                additional_constrains.emplace_back(model.AddScopedConstrain(constr));
-
-            BnC();
+                BnC();
+            }
+            return;
         }
 
         auto ways = GetWays(branch_index);
@@ -179,6 +251,7 @@ public:
         , best_obj_value(best)
         , graph(graph)
     {
+        vars_stats.resize(graph.GetSize(), 0);
     };
 
     uint64_t GetBranchCount() const

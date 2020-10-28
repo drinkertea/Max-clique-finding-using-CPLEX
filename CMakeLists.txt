@@ -11,11 +11,13 @@ find_package(Cplex)
 set(SOURCES
     source/graph.h
     source/graph.cpp
+    source/solution.h
+    source/solution.cpp
     source/solver.h
     source/solver.cpp
     source/common.hpp
     source/heuristic.hpp
-    source/model.hpp
+    source/model.hpp 
     source/utils.hpp
     source/main.cpp
 )
