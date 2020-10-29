@@ -6,7 +6,7 @@ struct ModelData;
 struct ConstrainsGuard
 {
     ConstrainsGuard(ModelData& model, size_t variable_index, IloNum lowerBound, IloNum upperBound);
-    ConstrainsGuard(ModelData& model, const std::set<uint32_t>& constr);
+    ConstrainsGuard(ModelData& model, const std::vector<uint32_t>& constr);
     ~ConstrainsGuard();
 
 private:
@@ -35,6 +35,8 @@ struct ModelData
                 for (auto type : g_strategies)
                     m_sum_vert_less_one += m_graph.GetHeuristicConstr(type);
             }
+
+            //auto nodes = graph.GetOrderedNodes(Graph::ColorizationType::mindegree_random);
         }
 
         //AddNonEdgePairs();
@@ -73,7 +75,7 @@ struct ModelData
         return std::make_unique<ConstrainsGuard>(*this, variable_index, lowerBound, upperBound);
     }
 
-    std::unique_ptr<ConstrainsGuard> AddScopedConstrain(const std::set<uint32_t>& constr)
+    std::unique_ptr<ConstrainsGuard> AddScopedConstrain(const std::vector<uint32_t>& constr)
     {
         return std::make_unique<ConstrainsGuard>(*this, constr);
     }
@@ -204,7 +206,7 @@ ConstrainsGuard::ConstrainsGuard(ModelData& model, size_t variable_index, IloNum
     m_constrains = m_model.m_model.add(m_constrain);
 }
 
-ConstrainsGuard::ConstrainsGuard(ModelData& model, const std::set<uint32_t>& constr)
+ConstrainsGuard::ConstrainsGuard(ModelData& model, const std::vector<uint32_t>& constr)
     : m_model(model)
     , m_expr(m_model.m_env)
 {

@@ -18,11 +18,11 @@ class BnCHelper
 
     struct IndependetConstrain
     {
-        std::set<uint32_t> nodes;
+        std::vector<uint32_t> nodes;
         std::unique_ptr<ConstrainsGuard> constrain;
     };
 
-    std::vector<IndependetConstrain> additional_constrains;
+    //std::vector<IndependetConstrain> additional_constrains;
 
     struct BranchingData
     {
@@ -124,37 +124,27 @@ class BnCHelper
         }
     }
 
-    void CleanUp(const Solution& solution, size_t base_index)
+    void CleanUp(const Solution& solution, std::vector<IndependetConstrain>& additional_constrains)
     {
-        additional_constrains.erase(
-            std::remove_if(additional_constrains.begin() + base_index, additional_constrains.end(),
-                [&solution](const IndependetConstrain& constr) {
-                    double sum = 0;
-                    for (auto x : constr.nodes)
-                        sum += solution.variables[x];
-
-                    return EpsValue(sum) < 1.0;
-                }
-            ),
-            additional_constrains.end()
-        );
-    }
-
-    void Separate(const Solution& solution)
-    {
-        TimerGuard tg(average_heuristic_timer);
-        graph.GetWeightHeuristicConstrFor(solution.branching_index, solution.variables, [this](const HeuristicConstrain& constr) {
-            additional_constrains.emplace_back();
-            additional_constrains.back().constrain = model.AddScopedConstrain(constr.nodes);
-            additional_constrains.back().nodes = constr.nodes;
+        std::erase_if(additional_constrains, [&solution](const auto& constr) {
+            return EpsValue(solution.GetNodesWeight(constr.nodes)) < 1.0;
         });
     }
 
-    void Cutting(Solution& solution)
+    void Separate(const Solution& solution, std::vector<IndependetConstrain>& additional_constrains)
+    {
+        TimerGuard tg(average_heuristic_timer);
+        graph.GetWeightHeuristicConstrFor(solution.branching_index, solution.variables, [this, &additional_constrains](auto&& constr) {
+            additional_constrains.emplace_back();
+            additional_constrains.back().constrain = model.AddScopedConstrain(constr);
+            additional_constrains.back().nodes = std::move(constr);
+        });
+    }
+
+    void Cutting(Solution& solution, std::vector<IndependetConstrain>& additional_constrains)
     {
         TimerGuard tg(average_loop_timer);
         std::deque<double> sols;
-        size_t base_index = additional_constrains.size();
         while (true)
         {
             if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
@@ -163,11 +153,8 @@ class BnCHelper
             if (solution.branching_index == g_invalid_index)
                 return;
 
-            if (base_index != additional_constrains.size())
-                CleanUp(solution, base_index);
-
-            base_index = additional_constrains.size();
-            Separate(solution);
+            size_t base_index = additional_constrains.size();
+            Separate(solution, additional_constrains);
 
             if (base_index == additional_constrains.size())
                 return;
@@ -192,18 +179,11 @@ class BnCHelper
         Solution solution = initial ? *initial : Solve();
         ++branches_count;
 
-        Cutting(solution);
+        std::vector<IndependetConstrain> additional_constrains;
+        Cutting(solution, additional_constrains);
 
         if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
             return;
-
-        std::cout << depth << std::fixed << std::setprecision(2) 
-            << " " << additional_constrains.size()
-            << " " << solution.upper_bound
-            << " " << average_heuristic_timer.GetValue()
-            << " " << average_loop_timer.GetValue()
-            << " " << average_solve_timer.GetValue()
-            << std::endl;
 
         size_t branch_index = solution.branching_index;
         if (branch_index == g_invalid_index)
@@ -227,6 +207,16 @@ class BnCHelper
             }
             return;
         }
+
+        CleanUp(solution, additional_constrains);
+
+        std::cout << depth << std::fixed << std::setprecision(2)
+            << " " << additional_constrains.size()
+            << " " << solution.upper_bound
+            << " " << average_heuristic_timer.GetValue()
+            << " " << average_loop_timer.GetValue()
+            << " " << average_solve_timer.GetValue()
+            << std::endl;
 
         auto ways = GetWays(branch_index);
         Branching(ways.first,  branch_index);

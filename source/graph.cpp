@@ -113,17 +113,6 @@ Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
     return result;
 }
 
-HeuristicConstrain Extract(const std::vector<int>& is, const std::vector<double>& weights)
-{
-    HeuristicConstrain res{};
-    for (auto x : is)
-    {
-        res.nodes.emplace(x);
-        res.weight += weights[x];
-    }
-    return res;
-}
-
 std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
 {
     std::vector<uint32_t> nodes(m_graph.size(), 0);
@@ -131,8 +120,7 @@ std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
 
     std::vector<uint32_t> random_metric(m_graph.size(), 0);
     std::iota(random_metric.begin(), random_metric.end(), 0);
-    static uint64_t seed = 42;
-    std::mt19937 g(seed++);
+    std::mt19937 g(42);
     std::shuffle(random_metric.begin(), random_metric.end(), g);
 
     if (type == ColorizationType::maxdegree)
@@ -171,32 +159,93 @@ std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
     return nodes;
 }
 
-void Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights, const std::function<void(const HeuristicConstrain&)>& callback) const
+struct WeightNode
 {
-    struct WeightNode
+    WeightNode(uint32_t l, double w, uint32_t ro)
+        : label(l)
+        , weight(w)
+        , eps100w(uint32_t(w * 100))
+        , random_order(ro)
     {
-        WeightNode(uint32_t l, double w, uint32_t ro)
-            : label(l)
-            , weight(w)
-            , eps100w(uint32_t(w * 100))
-            , random_order(ro)
+    }
+
+    bool operator<(const WeightNode& r) const
+    {
+        return std::tie(eps100w, random_order, weight, label) >
+               std::tie(r.eps100w, r.random_order, r.weight, r.label);
+    }
+
+    uint32_t label = 0;
+    double   weight = 0.0;
+
+private:
+    uint32_t eps100w = 0;
+    uint32_t random_order = 0;
+};
+
+struct LocalSearchHelper
+{
+    const std::vector<std::set<WeightNode>>& non_adj_sorted;
+    std::mt19937 g{42};
+
+    void Search(const std::vector<uint32_t>& constr, uint32_t n, const std::function<void(std::vector<uint32_t>&&)>& callback)
+    {
+        constexpr uint32_t k = 3;
+        if (constr.size() <= k * 2 + 1)
+            return;
+
+        auto nodes = constr;
+        std::array<uint32_t, k> banned;
+        for (uint32_t i = 0; i < k; ++i)
         {
+            std::uniform_int_distribution<size_t> dist(0, nodes.size() - 1);
+            auto val = dist(g);
+            std::swap(nodes[val], nodes.back());
+            banned[i] = nodes.back();
+            nodes.pop_back();
         }
 
-        bool operator<(const WeightNode& r) const
+        auto t = non_adj_sorted[nodes.front()];
+        for (uint32_t i = 1; i < nodes.size(); ++i)
         {
-            return std::tie(eps100w, random_order, weight, label) >
-                std::tie(r.eps100w, r.random_order, r.weight, r.label);
+            t *= non_adj_sorted[nodes[i]];
         }
+        if (t.size() <= k)
+            return;
 
-        uint32_t label = 0;
-        double   weight = 0.0;
+        std::vector<uint32_t> consider;
+        for (const auto& x : t)
+            consider.push_back(x.label);
 
-    private:
-        uint32_t eps100w = 0;
-        uint32_t random_order = 0;
-    };
+        n = std::min<uint32_t>(n, (consider.size() / k) + 1);
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            auto tt = t;
+            std::vector<uint32_t> new_nodes;
+            std::shuffle(consider.begin(), consider.end(), g);
 
+            for (auto v : consider)
+            {
+                if (banned[0] == v || banned[1] == v || banned[2] == v)
+                    continue;
+
+                tt *= non_adj_sorted[v];
+                new_nodes.emplace_back(v);
+                if (tt.empty())
+                    break;
+            }
+
+            if (new_nodes.size() + nodes.size() < constr.size())
+                continue;
+
+            new_nodes.insert(new_nodes.end(), nodes.begin(), nodes.end());
+            callback(std::move(new_nodes));
+        }
+    }
+};
+
+void Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights, const std::function<void(std::vector<uint32_t>&&)>& callback) const
+{
     std::vector<std::set<WeightNode>> non_adj_sorted(m_graph.size());
     for (uint32_t i = 0; i < m_graph.size(); ++i)
     {
@@ -208,28 +257,31 @@ void Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double
     }
     std::set<WeightNode> nodes = non_adj_sorted[start];
 
-    HeuristicConstrain base_constr{ weights[start], { start } };
-
+    std::vector<uint32_t> constr;
+    constr.reserve(m_graph.size());
+    LocalSearchHelper lsh{ non_adj_sorted };
     while (!nodes.empty())
     {
         auto t = non_adj_sorted[start] * non_adj_sorted[nodes.begin()->label];
         nodes.erase(nodes.begin());
 
-        HeuristicConstrain constr = base_constr;
+        constr.clear();
+        constr.emplace_back(start);
+        double weight = weights[start];
         while (!t.empty())
         {
             auto node = t.begin()->label;
-            auto weight = t.begin()->weight;
+            weight += t.begin()->weight;
 
             t *= non_adj_sorted[node];
 
-            constr.weight += weight;
-            constr.nodes.emplace(node);
+            constr.emplace_back(node);
         }
 
-        if (EpsValue(constr.weight) <= 1.0)
+        if (EpsValue(weight) <= 1.0)
             continue;
 
-        callback(constr);
+        lsh.Search(constr, 10, callback);
+        callback(std::move(constr));
     }
 }

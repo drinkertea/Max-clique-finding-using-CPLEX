@@ -40,17 +40,6 @@ std::set<T>& operator*=(std::set<T>& A, const std::set<T>& B)
     return A;
 }
 
-struct HeuristicConstrain
-{
-    double weight = 0.0;
-    std::set<uint32_t> nodes;
-
-    bool operator<(const HeuristicConstrain& r) const
-    {
-        return std::tie(weight, nodes) > std::tie(r.weight, r.nodes);
-    }
-};
-
 struct Graph
 {
     using ColorToVerts = std::map<uint32_t, std::vector<uint32_t>>;
@@ -88,16 +77,16 @@ struct Graph
         return true;
     }
 
-    std::set<std::set<uint32_t>> CheckSolution(const std::set<uint32_t>& verts) const
+    std::set<std::vector<uint32_t>> CheckSolution(const std::set<uint32_t>& verts) const
     {
-        std::set<std::set<uint32_t>> res;
+        std::set<std::vector<uint32_t>> res;
         for (auto v : verts)
         {
             for (auto v1 : verts)
             {
                 if (v != v1 && !HasEdge(v, v1))
                 {
-                    res.emplace(std::set<uint32_t>{ v, v1 });
+                    res.emplace(std::vector<uint32_t>{ v, v1 });
                 }
             }
         }
@@ -155,7 +144,7 @@ struct Graph
     void GetWeightHeuristicConstrFor(
         uint32_t start,
         const std::vector<double>& weights,
-        const std::function<void(const HeuristicConstrain&)>& callback
+        const std::function<void(std::vector<uint32_t>&&)>& callback
     ) const;
 
     std::set<std::set<uint32_t>> GetHeuristicConstr(ColorizationType type) const
