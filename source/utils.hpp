@@ -214,6 +214,58 @@ private:
     std::chrono::system_clock::time_point start;
 };
 
+struct AvgTimer
+{
+    AvgTimer()
+    {
+    }
+
+    void Reset()
+    {
+        timer.Reset();
+    }
+
+    void Stop()
+    {
+        auto elapsed = timer.Stop();
+        if (cnt++ == 0)
+        {
+            avg = double(elapsed);
+        }
+        else
+        {
+            avg += (1.0 / (double(cnt))) * (double(elapsed) - avg);
+        }
+    }
+
+    double GetValue() const
+    {
+        return avg;
+    }
+
+private:
+    Timer    timer{};
+    double   avg = 0;
+    uint32_t cnt = 0;
+};
+
+struct TimerGuard
+{
+    TimerGuard(AvgTimer& t)
+        : timer(t)
+    {
+        timer.Reset();
+    }
+
+    ~TimerGuard()
+    {
+        timer.Stop();
+    }
+
+private:
+    AvgTimer& timer;
+};
+
 struct NonEdgeKHelper
 {
     uint32_t                max_depth = 0;

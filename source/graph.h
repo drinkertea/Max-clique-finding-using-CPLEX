@@ -3,10 +3,12 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <array>
 #include <set>
 #include <map>
 #include <algorithm>
 #include <numeric>
+#include <functional>
 
 template <class  T>
 std::set<T> operator*(const std::set<T>& A, const std::set<T>& B)
@@ -37,6 +39,15 @@ std::set<T>& operator+=(std::set<T>& A, const std::set<T>& B)
     for (typename std::set<T>::const_iterator p = B.begin(); p != B.end(); p++)
         A.insert(*p);
 
+    return A;
+}
+
+template <class T>
+std::set<T>& operator*=(std::set<T>& A, const std::set<T>& B)
+{
+    std::erase_if(A, [&B](const auto& x) {
+        return !B.count(x);
+    });
     return A;
 }
 
@@ -155,6 +166,14 @@ struct Graph
     std::vector<uint32_t> GetOrderedNodes(ColorizationType type) const;
 
     std::set<HeuristicConstrain> GetWeightHeuristicConstr(const std::vector<double>& weights) const;
+    std::set<HeuristicConstrain> GetWeightHeuristicConstrEx(const std::vector<double>& weights) const;
+
+    void GetWeightHeuristicConstrFor(
+        uint32_t start,
+        const std::vector<double>& weights,
+        const std::function<void(const HeuristicConstrain&)>& callback
+    ) const;
+
     std::set<HeuristicConstrain> GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights) const;
 
     std::set<std::set<uint32_t>> GetHeuristicConstr(ColorizationType type) const
@@ -229,4 +248,6 @@ private:
     std::vector<std::set<uint32_t>> m_adj;
     std::vector<std::vector<int>> m_adj_vec;
     std::vector<std::set<uint32_t>> m_non_adj;
+
+    std::vector<std::vector<uint32_t>> m_random_metrics;
 };
