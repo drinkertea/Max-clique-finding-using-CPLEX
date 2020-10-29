@@ -188,7 +188,7 @@ struct LocalSearchHelper
     const std::vector<std::set<WeightNode>>& non_adj_sorted;
     std::mt19937 g{42};
 
-    void Search(const std::vector<uint32_t>& constr, uint32_t n, const std::function<void(std::vector<uint32_t>&&)>& callback)
+    void Search(const std::vector<uint32_t>& constr, const std::vector<double>& weights, uint32_t n, const std::function<void(std::vector<uint32_t>&&)>& callback)
     {
         constexpr uint32_t k = 3;
         if (constr.size() <= k * 2 + 1)
@@ -206,36 +206,36 @@ struct LocalSearchHelper
         }
 
         auto t = non_adj_sorted[nodes.front()];
+        double weight = weights[nodes.front()];
         for (uint32_t i = 1; i < nodes.size(); ++i)
         {
             t *= non_adj_sorted[nodes[i]];
+            weight += weights[nodes[i]];
         }
+        std::erase_if(t, [&banned](const auto& v) {
+            return banned[0] == v.label || banned[1] == v.label || banned[2] == v.label;
+        });
+
         if (t.size() <= k)
             return;
 
-        std::vector<uint32_t> consider;
-        for (const auto& x : t)
-            consider.push_back(x.label);
-
-        n = std::min<uint32_t>(n, (consider.size() / k) + 1);
-        for (uint32_t i = 0; i < n; ++i)
+        for (const auto& start_node : t)
         {
-            auto tt = t;
-            std::vector<uint32_t> new_nodes;
-            std::shuffle(consider.begin(), consider.end(), g);
+            auto start = start_node.label;
+            auto tt = t * non_adj_sorted[start];
+            std::vector<uint32_t> new_nodes = { start };
+            double add_weight = weights[start];
 
-            for (auto v : consider)
+            while (!tt.empty())
             {
-                if (banned[0] == v || banned[1] == v || banned[2] == v)
-                    continue;
+                auto node = tt.begin()->label;
+                add_weight += tt.begin()->weight;
+                new_nodes.emplace_back(node);
 
-                tt *= non_adj_sorted[v];
-                new_nodes.emplace_back(v);
-                if (tt.empty())
-                    break;
+                tt *= non_adj_sorted[node];
             }
 
-            if (new_nodes.size() + nodes.size() < constr.size())
+            if (EpsValue(weight + add_weight) <= 1.0)
                 continue;
 
             new_nodes.insert(new_nodes.end(), nodes.begin(), nodes.end());
@@ -281,7 +281,7 @@ void Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double
         if (EpsValue(weight) <= 1.0)
             continue;
 
-        lsh.Search(constr, 10, callback);
+        lsh.Search(constr, weights, 10, callback);
         callback(std::move(constr));
     }
 }
