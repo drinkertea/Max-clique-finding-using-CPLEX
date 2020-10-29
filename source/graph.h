@@ -21,17 +21,6 @@ std::set<T> operator*(const std::set<T>& A, const std::set<T>& B)
     return res;
 }
 
-template <class  T, class U>
-std::set<T, U> operator*(const std::set<T, U>& A, const std::set<T, U>& B)
-{
-    std::set<T, U> res;
-
-    std::set_intersection(A.begin(), A.end(), B.begin(), B.end(),
-        inserter(res, res.begin()));
-
-    return res;
-}
-
 template <class T>
 std::set<T>& operator+=(std::set<T>& A, const std::set<T>& B)
 {
@@ -161,20 +150,13 @@ struct Graph
         return m_graph[i][j];
     }
 
-    std::set<HeuristicConstrain> GetHMIS(const std::vector<double>& weights) const;
-
     std::vector<uint32_t> GetOrderedNodes(ColorizationType type) const;
-
-    std::set<HeuristicConstrain> GetWeightHeuristicConstr(const std::vector<double>& weights) const;
-    std::set<HeuristicConstrain> GetWeightHeuristicConstrEx(const std::vector<double>& weights) const;
 
     void GetWeightHeuristicConstrFor(
         uint32_t start,
         const std::vector<double>& weights,
         const std::function<void(const HeuristicConstrain&)>& callback
     ) const;
-
-    std::set<HeuristicConstrain> GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights) const;
 
     std::set<std::set<uint32_t>> GetHeuristicConstr(ColorizationType type) const
     {

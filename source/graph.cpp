@@ -5,7 +5,6 @@
 #include <numeric>
 #include "graph.h"
 #include "common.hpp"
-#include "solution.h"
 
 Graph::Graph(const std::string& path)
 {
@@ -125,47 +124,6 @@ HeuristicConstrain Extract(const std::vector<int>& is, const std::vector<double>
     return res;
 }
 
-std::set<HeuristicConstrain> Graph::GetHMIS(const std::vector<double>& weights) const
-{
-    std::vector<int> weights_int;
-    for (auto x : weights)
-        weights_int.emplace_back(int(x * 10000));
-
-    SolutionMIS s(this, weights_int);
-    while (!s.isMaximal()) {
-        s.addRandomVertex();
-        assert(s.integrityCheck());
-    }
-
-    do {
-        while (!s.isMaximal()) {
-            s.addRandomVertex();
-        }
-    } while (s.omegaImprovement() || s.twoImprovement() || s.threeImprovement());
-
-    int k = 1024;
-    std::set<HeuristicConstrain> solutions;
-    solutions.emplace(Extract(s.i_set(), weights));
-    while (k-- > 0)
-    {
-        SolutionMIS next_s(s);
-
-        next_s.force(2);
-
-        assert(next_s.integrityCheck());
-
-        do {
-            while (!next_s.isMaximal()) {
-                next_s.addRandomVertex();
-            }
-        } while (next_s.omegaImprovement() || next_s.twoImprovement() || s.threeImprovement());
-
-        solutions.emplace(Extract(next_s.i_set(), weights));
-    }
-
-    return solutions;
-}
-
 std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
 {
     std::vector<uint32_t> nodes(m_graph.size(), 0);
@@ -211,141 +169,6 @@ std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
     }
 
     return nodes;
-}
-
-std::set<HeuristicConstrain> Graph::GetWeightHeuristicConstr(const std::vector<double>& weights) const
-{
-    struct WeightNode
-    {
-        uint32_t label = 0;
-        double   weight = 0.0;
-
-        bool operator<(const WeightNode& r) const
-        {
-            return std::tie(weight, label) > std::tie(r.weight, r.label);
-        }
-    };
-
-    std::vector<std::set<WeightNode>> non_adj_sorted(m_graph.size());
-    std::set<WeightNode> nodes;
-    for (uint32_t i = 0; i < m_graph.size(); ++i)
-    {
-        nodes.emplace(WeightNode{ i, weights[i] });
-        for (auto j : m_non_adj[i])
-        {
-            non_adj_sorted[i].emplace(WeightNode{ j, weights[j] });
-            non_adj_sorted[j].emplace(WeightNode{ i, weights[i] });
-        }
-    }
-
-    std::set<HeuristicConstrain> result;
-    while (!nodes.empty())
-    {
-        auto t = non_adj_sorted[nodes.begin()->label];
-        nodes.erase(nodes.begin());
-
-        HeuristicConstrain constr{};
-        while (!t.empty())
-        {
-            auto node = t.begin()->label;
-            auto weight = t.begin()->weight;
-
-            t *= non_adj_sorted[node];
-
-            constr.weight += weight;
-            constr.nodes.emplace(node);
-        }
-
-        if (EpsValue(constr.weight) <= 1.0)
-            continue;
-
-        result.emplace(std::move(constr));
-    }
-    return result;
-}
-
-std::set<HeuristicConstrain> Graph::GetWeightHeuristicConstrEx(const std::vector<double>& weights) const
-{
-    std::map<double, uint32_t> orded;
-    for (size_t i = 0; i < weights.size(); ++i)
-    {
-        auto val = weights[i];
-        if (IsInteger(val))
-            continue;
-
-        orded[val] = i;
-    }
-    if (orded.empty())
-        return {};
-
-    struct WeightNode
-    {
-        WeightNode(uint32_t l, double w, uint32_t ro)
-            : label(l)
-            , weight(w)
-            , eps100w(uint32_t(w * 100))
-            , random_order(ro)
-        {
-        }
-
-        bool operator<(const WeightNode& r) const
-        {
-            return std::tie(eps100w, random_order, weight, label) >
-                   std::tie(r.eps100w, r.random_order, r.weight, r.label);
-        }
-
-        uint32_t label = 0;
-        double   weight = 0.0;
-
-    private:
-        uint32_t eps100w = 0;
-        uint32_t random_order = 0;
-    };
-
-    auto start = orded.rbegin()->second;
-
-    std::vector<std::set<WeightNode>> non_adj_sorted(m_graph.size());
-    for (uint32_t i = 0; i < m_graph.size(); ++i)
-    {
-        for (auto j : m_non_adj[i])
-        {
-            non_adj_sorted[i].emplace(j, weights[j], m_random_metrics[start][j]);
-            non_adj_sorted[j].emplace(i, weights[i], m_random_metrics[start][i]);
-        }
-    }
-    std::set<HeuristicConstrain> result;
-
-    int k = 5;
-    for (auto it = orded.rbegin(); it != orded.rend() && k-- > 0; ++it)
-    {
-        auto start = it->second;
-        std::set<WeightNode> nodes = non_adj_sorted[start];
-        HeuristicConstrain base_constr{ weights[start], { start } };
-        while (!nodes.empty())
-        {
-            auto t = non_adj_sorted[start] * non_adj_sorted[nodes.begin()->label];
-            nodes.erase(nodes.begin());
-
-            HeuristicConstrain constr = base_constr;
-            while (!t.empty())
-            {
-                auto node = t.begin()->label;
-                auto weight = t.begin()->weight;
-
-                t *= non_adj_sorted[node];
-
-                constr.weight += weight;
-                constr.nodes.emplace(node);
-            }
-
-            if (EpsValue(constr.weight) <= 1.0)
-                continue;
-
-            result.emplace(std::move(constr));
-        }
-    }
-
-    return result;
 }
 
 void Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights, const std::function<void(const HeuristicConstrain&)>& callback) const
@@ -409,13 +232,4 @@ void Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double
 
         callback(constr);
     }
-}
-
-std::set<HeuristicConstrain> Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights) const
-{
-    std::set<HeuristicConstrain> result;
-    GetWeightHeuristicConstrFor(start, weights, [&result](const HeuristicConstrain& constr) {
-        result.emplace(constr);
-    });
-    return result;
 }
