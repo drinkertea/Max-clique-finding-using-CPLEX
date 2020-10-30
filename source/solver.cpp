@@ -5,24 +5,30 @@
 class BnCHelper
 {
     std::atomic<uint64_t>& best_obj_value;
-    ModelData&             model;
+    ModelData              model;
     ThreadsAccumulator&    accumulator;
     uint64_t               branches_count = 0;
     const Graph&           graph;
     uint32_t               depth = 0;
+
+    BnCHelper(const BnCHelper& r)
+        : best_obj_value(r.best_obj_value)
+        , model(r.model)
+        , accumulator(r.accumulator)
+        , graph(r.graph)
+        , depth(r.depth)
+    {
+    }
+
     AvgTimer               average_heuristic_timer;
     AvgTimer               average_loop_timer;
     AvgTimer               average_solve_timer;
-
-    std::vector<uint32_t> vars_stats;
 
     struct IndependetConstrain
     {
         std::vector<uint32_t> nodes;
         std::unique_ptr<ConstrainsGuard> constrain;
     };
-
-    //std::vector<IndependetConstrain> additional_constrains;
 
     struct BranchingData
     {
@@ -34,8 +40,10 @@ class BnCHelper
     void Branching(BranchingData& way, size_t vertex, bool is_first = false)
     {
         ++depth;
-        auto guard = model.AddScopedConstrains(vertex, way.way, way.way);
-        BnC(is_first ? &way.res : nullptr);
+        BnCHelper sub_helper(*this);
+        auto guard = sub_helper.model.AddScopedConstrains(vertex, way.way, way.way);
+        sub_helper.BnC(is_first ? &way.res : nullptr);
+        branches_count += sub_helper.branches_count;
         --depth;
     }
 
@@ -224,13 +232,12 @@ class BnCHelper
     }
 
 public:
-    BnCHelper(ModelData& m, ThreadsAccumulator& p, std::atomic<uint64_t>& best, const Graph& graph)
+    BnCHelper(const ModelData& m, ThreadsAccumulator& p, std::atomic<uint64_t>& best, const Graph& graph)
         : model(m)
         , accumulator(p)
         , best_obj_value(best)
         , graph(graph)
     {
-        vars_stats.resize(graph.GetSize(), 0);
     };
 
     uint64_t GetBranchCount() const

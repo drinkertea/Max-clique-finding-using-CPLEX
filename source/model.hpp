@@ -47,10 +47,17 @@ struct ModelData
         : m_graph(r.m_graph)
         , m_size(r.m_size)
         , m_type(r.m_type)
-        , m_model(m_env)
+        , m_model(r.m_model.getClone(m_env))
         , m_variables(m_env, m_size)
     {
-        InitModel(r.m_sum_vert_less_one);
+        auto it = IloModel::Iterator(m_model);
+        while (it.ok())
+        {
+            auto extr = *it;
+            if (extr.isVariable())
+                m_variables[std::stoi(extr.getName())] = extr.asVariable();
+            ++it;
+        }
     }
 
     ~ModelData()
@@ -110,7 +117,7 @@ private:
     {
         for (uint32_t i = 0; i < m_size; ++i)
         {
-            std::string name = "y[" + std::to_string(i + 1) + "]";
+            std::string name = std::to_string(i);
             m_variables[i] = IloNumVar(m_env, 0, 1, m_type, name.c_str());
         }
 
@@ -121,6 +128,7 @@ private:
 
         AddConstrains(m_sum_vert_less_one);
         m_model.add(obj);
+        m_model.add(m_variables);
     }
 
     void AddPerColorConstrains(Graph::ColorizationType type)
@@ -188,7 +196,7 @@ private:
 
     std::set<std::set<uint32_t>> m_sum_vert_less_one;
 
-    const Graph& m_graph;
+    const Graph&    m_graph;
     size_t          m_size = 0;
     IloNumVar::Type m_type;
     IloEnv          m_env{};
