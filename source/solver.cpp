@@ -15,6 +15,7 @@ class BnCHelper
     uint32_t               depth = 0;
     uint32_t               ones_count = 0;
 
+public:
     BnCHelper(const BnCHelper& r, bool is_one)
         : best_obj_value(r.best_obj_value)
         , model(r.model)
@@ -25,6 +26,7 @@ class BnCHelper
     {
     }
 
+private:
     AvgTimer               average_heuristic_timer;
     AvgTimer               average_loop_timer;
     AvgTimer               average_solve_timer;
@@ -44,23 +46,22 @@ class BnCHelper
 
     void Branching(BranchingData& way, size_t vertex, bool is_first = false)
     {
-        ++depth;
         if (way.way == 1.0)
             ++ones_count;
         auto guard = model.AddScopedConstrains(vertex, way.way, way.way);
         BnC(is_first ? &way.res : nullptr, way.way == 1.0);
         if (way.way == 1.0)
             --ones_count;
-        --depth;
     }
 
     auto BranchingAsync(const BranchingData& way, size_t vertex)
     {
-        return std::async(std::launch::async, [this, way_data = way, vertex] {
-            BnCHelper sub_helper(*this, way_data.way == 1.0);
-            auto guard = sub_helper.model.AddScopedConstrains(vertex, way_data.way, way_data.way);
-            sub_helper.BnC(&way_data.res, way_data.way == 1.0);
-            return sub_helper.GetBranchCount();
+        auto sub_helper = std::make_shared<BnCHelper>(*this, way.way == 1.0);
+        return std::async(std::launch::async, [sub_helper, way_data = way, vertex] {
+            auto& helper = *sub_helper;
+            auto guard = helper.model.AddScopedConstrains(vertex, way_data.way, way_data.way);
+            helper.BnC(way_data.res.variables.empty() ? nullptr : &way_data.res, way_data.way == 1.0);
+            return helper.GetBranchCount();
         });
     }
 
@@ -88,7 +89,7 @@ class BnCHelper
 
     size_t SelectBranch(const std::vector<double>& vars) const
     {
-        double max = 0;
+        double min = std::numeric_limits<double>::max();
         size_t res = g_invalid_index;
 
         for (size_t i = 0; i < vars.size(); ++i)
@@ -97,10 +98,10 @@ class BnCHelper
             if (IsInteger(val))
                 continue;
 
-            if (val <= max)
+            if (val >= min)
                 continue;
 
-            max = val;
+            min = val;
             res = i;
         }
 
@@ -122,7 +123,8 @@ class BnCHelper
         for (size_t i = 0; i < model.GetSize(); ++i)
         {
             res.variables[i] = model.ExtractValue(cplex, i);
-            res.integer_count += uint64_t(EpsValue(res.variables[i]) == 1.0);
+            if (EpsValue(res.variables[i]) == 1.0)
+                ++res.integer_count;
         }
 
         res.branching_index = SelectBranch(res.variables);
@@ -157,8 +159,8 @@ class BnCHelper
     {
         TimerGuard tg(average_heuristic_timer);
         size_t max_size = 0;
-        graph.GetWeightHeuristicConstrFor(solution.branching_index, solution.variables, [this, &additional_constrains, &max_size](auto&& constr) {
-            //max_size = std::max(max_size, constr.size());
+        graph.GetWeightHeuristicConstr(solution.variables, [this, &additional_constrains, &max_size](auto&& constr) {
+            //max_size = std::min(max_size, constr.size());
             //if (constr.size() + 3 < max_size)
             //    return;
             additional_constrains.emplace_back();
@@ -216,8 +218,8 @@ class BnCHelper
         auto force_cut = std::max(uint32_t(sqrt(double(graph.GetSize()))), 1u);
 
         std::vector<IndependetConstrain> additional_constrains;
-        if (depth < force_cut || ones_count > 0)
-            Cutting(solution, additional_constrains);
+        //if (depth < force_cut || ones_count > 0)
+        Cutting(solution, additional_constrains);
 
         if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
             return;
@@ -259,29 +261,46 @@ class BnCHelper
             << std::endl;
         accumulator.Print(ss.str());
 
-        bool is_hard_branch = ones_count < 2 && is_one_way;
+        bool is_zero_branch = ones_count == 0;
+        bool is_hard_branch = ones_count == 1 && is_one_way;
         bool is_close_to_root = depth < 4;
-        if (is_hard_branch || is_close_to_root)
+        depth++;
+        if (is_zero_branch)
         {
-            accumulator.Print("\n THREAD SPLIT \n");
-            threads_count += 2;
-            auto ways = GetWays(branch_index);
-            depth++;
+            accumulator.Print("\n ZERO SPLIT \n");
+            threads_count += 1;
+
+            Branches ways = { { 1.0 }, { 0.0 } };
             auto left = BranchingAsync(ways.first, branch_index);
-            auto right = BranchingAsync(ways.second, branch_index);
+            Branching(ways.second, branch_index);
             left.wait();
-            right.wait();
             branches_count += left.get();
-            branches_count += right.get();
-            threads_count -= 2;
-            depth--;
+
+            threads_count -= 1;
         }
         else
         {
-            auto ways = GetWays(branch_index);
-            Branching(ways.first, branch_index);
-            Branching(ways.second, branch_index);
+            if (is_hard_branch || is_close_to_root)
+            {
+                accumulator.Print("\n THREAD SPLIT \n");
+                threads_count += 2;
+                auto ways = GetWays(branch_index);
+                auto left = BranchingAsync(ways.first, branch_index);
+                auto right = BranchingAsync(ways.second, branch_index);
+                left.wait();
+                right.wait();
+                branches_count += left.get();
+                branches_count += right.get();
+                threads_count -= 2;
+            }
+            else
+            {
+                auto ways = GetWays(branch_index);
+                Branching(ways.first, branch_index);
+                Branching(ways.second, branch_index);
+            }
         }
+        depth--;
     }
 
 public:
@@ -306,9 +325,12 @@ public:
         std::cout << "Heuristic solution: " << heuristic_clique.size() << std::endl;
         std::cout << "Time:               " << timer.Stop() << " ms" << std::endl << std::endl;
 
-        if (initial_solution.integer_count < heuristic_clique.size())
+        bool initial_better = initial_solution.branching_index == g_invalid_index &&
+                              initial_solution.integer_count < heuristic_clique.size() &&
+                              graph.CheckSolution(ExtractClique(initial_solution.variables)).empty();
+
+        if (!initial_better)
         {
-            initial_solution.branching_index = SelectBranch(initial_solution.variables);
             for (auto& x : initial_solution.variables)
                 x = 0.0;
             for (auto vert : heuristic_clique)

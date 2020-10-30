@@ -40,6 +40,30 @@ std::set<T>& operator*=(std::set<T>& A, const std::set<T>& B)
     return A;
 }
 
+struct WeightNode
+{
+    WeightNode(uint32_t l, double w, uint32_t ro)
+        : label(l)
+        , weight(w)
+        , eps100w(uint32_t(w * 100))
+        , random_order(ro)
+    {
+    }
+
+    bool operator<(const WeightNode& r) const
+    {
+        return std::tie(eps100w, random_order, weight, label) >
+               std::tie(r.eps100w, r.random_order, r.weight, r.label);
+    }
+
+    uint32_t label = 0;
+    double   weight = 0.0;
+
+private:
+    uint32_t eps100w = 0;
+    uint32_t random_order = 0;
+};
+
 struct Graph
 {
     using ColorToVerts = std::map<uint32_t, std::vector<uint32_t>>;
@@ -147,6 +171,11 @@ struct Graph
         const std::function<void(std::vector<uint32_t>&&)>& callback
     ) const;
 
+    void GetWeightHeuristicConstr(
+        const std::vector<double>& weights,
+        const std::function<void(std::vector<uint32_t>&&)>& callback
+    ) const;
+
     std::set<std::set<uint32_t>> GetHeuristicConstr(ColorizationType type) const
     {
         return GetHeuristicConstr(GetOrderedNodes(type));
@@ -213,6 +242,14 @@ struct Graph
         }
         return res;
     }
+
+    std::vector<std::set<WeightNode>> GetWeightlyNonAdj(uint32_t start, const std::vector<double>& weights) const;
+    void GetWeightHeuristicConstrFor(
+        uint32_t start,
+        const std::vector<double>& weights,
+        const std::function<void(std::vector<uint32_t>&&)>& callback,
+        const std::vector<std::set<WeightNode>>& non_adj_sorted
+    ) const;
 
 private:
     std::vector<std::vector<bool>> m_graph;
