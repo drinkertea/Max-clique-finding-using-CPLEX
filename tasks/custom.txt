@@ -1,2 +1,4 @@
-brock200_2.clq
+p_hat300-2.clq
+p_hat300-3.clq
 p_hat300-1.clq
+brock200_2.clq
