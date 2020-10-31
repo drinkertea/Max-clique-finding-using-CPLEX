@@ -13,6 +13,8 @@ Graph::Graph(const std::string& path)
         throw std::runtime_error("Invalid file path!");
 
     std::string line;
+    uint32_t vertex_count = 0u;
+    uint32_t edge_count = 0u;
     while (std::getline(infile, line))
     {
         std::istringstream iss(line);
@@ -27,8 +29,6 @@ Graph::Graph(const std::string& path)
         else if (type == 'p')
         {
             std::string name;
-            uint32_t vertex_count = 0u;
-            uint32_t edge_count   = 0u;
             if (!(iss >> name >> vertex_count >> edge_count))
                 continue;
 
@@ -77,6 +77,8 @@ Graph::Graph(const std::string& path)
 
     for (auto& rm : m_random_metrics)
         rm = GetOrderedNodes(ColorizationType::random);
+
+    density = double(2 * edge_count) / double(vertex_count * (vertex_count - 1));
 }
 
 Graph::ColorToVerts Graph::Colorize(ColorizationType type) const
@@ -262,9 +264,10 @@ void Graph::GetWeightHeuristicConstr(
 
     auto non_adj_sorted = GetWeightlyNonAdj(max, weights);
     int k = 0;
+    int max_cnt = int(sqrt(double(m_graph.size())) * density / 2.0);
     for (const auto& v : consider)
     {
-        if (k++ == 10)
+        if (k++ == max_cnt)
             break;
 
         GetWeightHeuristicConstrFor(v.label, weights, callback, non_adj_sorted, non_adj_sorted[v.label]);

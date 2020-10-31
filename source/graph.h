@@ -260,4 +260,5 @@ private:
     std::vector<std::set<uint32_t>> m_non_adj;
 
     std::vector<std::vector<uint32_t>> m_random_metrics;
+    double density = 0.0;
 };
