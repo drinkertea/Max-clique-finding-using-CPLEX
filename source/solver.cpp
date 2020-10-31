@@ -5,32 +5,88 @@
 
 static std::atomic<uint32_t> threads_count = 0;
 
+struct ThreadingData
+{
+    ThreadsAccumulator      accumulator;
+    std::atomic<uint64_t>   best_obj_value = 1;
+
+    std::condition_variable cv;
+    std::mutex              cv_m;
+    std::atomic<uint32_t>   active_workers_count = 0;
+    const uint32_t          max_workers_count = std::thread::hardware_concurrency();
+
+    struct ScopeGuard
+    {
+        ThreadingData& threading;
+        uint32_t depth = 0;
+        ScopeGuard(ThreadingData& data, uint32_t depth)
+            : threading(data)
+            , depth(depth)
+        {
+            std::unique_lock<std::mutex> lk(threading.cv_m);
+            threading.cv.wait(lk, [this] {
+                return threading.active_workers_count < threading.max_workers_count;
+            });
+            ++threading.active_workers_count;
+
+            std::stringstream ss;
+            ss << std::endl << depth << ": started " << threading.active_workers_count << " / " << threading.max_workers_count;
+            threading.accumulator.Print(ss.str());
+        }
+
+        ~ScopeGuard()
+        {
+            std::stringstream ss;
+            ss << std::endl << depth << ": finished " << threading.active_workers_count << " / " << threading.max_workers_count;
+            threading.accumulator.Print(ss.str());
+
+            --threading.active_workers_count;
+            threading.cv.notify_one();
+        }
+    };
+
+    ScopeGuard GetAsyncGuard(uint32_t depth)
+    {
+        return { *this, depth };
+    }
+};
+
+struct Statistics
+{
+    uint64_t branches_count = 0;
+    AvgTimer average_heuristic_timer;
+    AvgTimer average_loop_timer;
+    AvgTimer average_solve_timer;
+
+    Statistics& operator+=(const Statistics& rhs)
+    {
+        branches_count += rhs.branches_count;
+        average_heuristic_timer += rhs.average_heuristic_timer;
+        average_loop_timer += rhs.average_loop_timer;
+        average_solve_timer += rhs.average_solve_timer;
+        return *this;
+    }
+};
+
 class BnCHelper
 {
-    std::atomic<uint64_t>& best_obj_value;
     ModelData              model;
-    ThreadsAccumulator&    accumulator;
-    uint64_t               branches_count = 0;
     const Graph&           graph;
+    ThreadingData&         threading;
+    Statistics             statistics{};
     uint32_t               depth = 0;
     uint32_t               ones_count = 0;
 
 public:
-    BnCHelper(const BnCHelper& r, bool is_one)
-        : best_obj_value(r.best_obj_value)
-        , model(r.model)
-        , accumulator(r.accumulator)
+    BnCHelper(const BnCHelper& r)
+        : model(r.model)
         , graph(r.graph)
         , depth(r.depth)
-        , ones_count(r.ones_count + uint32_t(is_one))
+        , threading(r.threading)
     {
     }
 
 private:
-    AvgTimer               average_heuristic_timer;
-    AvgTimer               average_loop_timer;
-    AvgTimer               average_solve_timer;
-
     struct IndependetConstrain
     {
         std::vector<uint32_t> nodes;
@@ -44,24 +100,34 @@ private:
     };
     using Branches = std::pair<BranchingData, BranchingData>;
 
-    void Branching(BranchingData& way, size_t vertex, bool is_first = false)
+    void Branching(const BranchingData& way, size_t vertex)
     {
-        if (way.way == 1.0)
-            ++ones_count;
-        auto guard = model.AddScopedConstrains(vertex, way.way, way.way);
-        BnC(is_first ? &way.res : nullptr, way.way == 1.0);
-        if (way.way == 1.0)
-            --ones_count;
+        ++depth;
+        ones_count += static_cast<uint32_t>(way.way);
+        {
+            auto guard = model.AddScopedConstrains(vertex, way.way, way.way);
+            BnC(way.res.variables.empty() ? nullptr : &way.res, way.way == 1.0);
+        }
+        ones_count -= static_cast<uint32_t>(way.way);
+        --depth;
+    }
+
+    void BranchingZero(const BranchingData& way, size_t vertex)
+    {
+        if (depth > 0)
+            return Branching(way, vertex);
+
+        auto guard = threading.GetAsyncGuard(depth);
+        Branching(way, vertex);
     }
 
     auto BranchingAsync(const BranchingData& way, size_t vertex)
     {
-        auto sub_helper = std::make_shared<BnCHelper>(*this, way.way == 1.0);
+        auto sub_helper = std::make_shared<BnCHelper>(*this);
         return std::async(std::launch::async, [sub_helper, way_data = way, vertex] {
-            auto& helper = *sub_helper;
-            auto guard = helper.model.AddScopedConstrains(vertex, way_data.way, way_data.way);
-            helper.BnC(way_data.res.variables.empty() ? nullptr : &way_data.res, way_data.way == 1.0);
-            return helper.GetBranchCount();
+            auto guard = sub_helper->threading.GetAsyncGuard(sub_helper->depth);
+            sub_helper->Branching(way_data, vertex);
+            return sub_helper->GetStats();
         });
     }
 
@@ -110,12 +176,13 @@ private:
 
     Solution Solve()
     {
-        TimerGuard tg(average_solve_timer);
+        TimerGuard tg(statistics.average_solve_timer);
         Solution res{};
 
         IloCplex cplex = model.CreateSolver();
-        //if (depth > 1)
-        //    cplex.setParam(IloCplex::Param::Threads, 1);
+        if (threading.max_workers_count <= threading.active_workers_count)
+            cplex.setParam(IloCplex::Param::Threads, 1);
+
         if (!cplex.solve())
             return res;
 
@@ -135,8 +202,16 @@ private:
 
     void OnBestSolution(const Solution& solution)
     {
-        best_obj_value = static_cast<uint64_t>(solution.integer_count);
-        accumulator.OnBestSolution(solution);
+        OnBestSolution(ExtractClique(solution.variables));
+    }
+
+    void OnBestSolution(const std::set<uint32_t>& clique)
+    {
+        if (clique.size() <= threading.best_obj_value)
+            return;
+
+        threading.best_obj_value = clique.size();
+        threading.accumulator.OnBestSolution(clique);
     }
 
     void CleanUp(const Solution& solution, size_t base, std::vector<IndependetConstrain>& additional_constrains)
@@ -157,12 +232,9 @@ private:
 
     void Separate(const Solution& solution, std::vector<IndependetConstrain>& additional_constrains)
     {
-        TimerGuard tg(average_heuristic_timer);
+        TimerGuard tg(statistics.average_heuristic_timer);
         size_t max_size = 0;
         graph.GetWeightHeuristicConstr(solution.variables, [this, &additional_constrains, &max_size](auto&& constr) {
-            //max_size = std::min(max_size, constr.size());
-            //if (constr.size() + 3 < max_size)
-            //    return;
             additional_constrains.emplace_back();
             additional_constrains.back().constrain = model.AddScopedConstrain(constr);
             additional_constrains.back().nodes = std::move(constr);
@@ -171,18 +243,12 @@ private:
 
     void Cutting(Solution& solution, std::vector<IndependetConstrain>& additional_constrains)
     {
-        TimerGuard tg(average_loop_timer);
+        TimerGuard tg(statistics.average_loop_timer);
         std::deque<double> sols;
         size_t base_index = additional_constrains.size();
-        auto start = std::chrono::system_clock::now();
         while (true)
         {
-            auto curr = std::chrono::system_clock::now();
-            auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(curr - start).count();
-            //if (diff > 1000)
-            //    return;
-
-            if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
+            if (EpsValue(solution.upper_bound) < static_cast<double>(threading.best_obj_value + 1))
                 return;
 
             if (solution.branching_index == g_invalid_index)
@@ -214,24 +280,25 @@ private:
     void BnC(const Solution* initial = nullptr, bool is_one_way = false)
     {
         Solution solution = initial ? *initial : Solve();
-        ++branches_count;
-        auto force_cut = std::max(uint32_t(sqrt(double(graph.GetSize()))), 1u);
+        ++statistics.branches_count;
+
+        if (EpsValue(solution.upper_bound) < static_cast<double>(threading.best_obj_value + 1))
+            return;
 
         std::vector<IndependetConstrain> additional_constrains;
-        //if (depth < force_cut || ones_count > 0)
         Cutting(solution, additional_constrains);
 
-        if (EpsValue(solution.upper_bound) < static_cast<double>(best_obj_value + 1))
+        if (EpsValue(solution.upper_bound) < static_cast<double>(threading.best_obj_value + 1))
             return;
 
         size_t branch_index = solution.branching_index;
         if (branch_index == g_invalid_index)
         {
-            auto non_edge_pairs = graph.CheckSolution(ExtractClique(solution.variables));
+            auto possible_clique = ExtractClique(solution.variables);
+            auto non_edge_pairs  = graph.CheckSolution(possible_clique);
             if (non_edge_pairs.empty())
             {
-                if (solution.integer_count >= best_obj_value)
-                    OnBestSolution(solution);
+                OnBestSolution(possible_clique);
             }
             else
             {
@@ -249,72 +316,45 @@ private:
 
         CleanUp(solution, 0, additional_constrains);
 
-        std::stringstream ss;
-        ss << depth << std::fixed << std::setprecision(2)
-            << " " << threads_count
-            << " " << ones_count
-            << " " << additional_constrains.size()
-            << " " << solution.upper_bound
-            << " " << average_heuristic_timer.GetValue()
-            << " " << average_loop_timer.GetValue()
-            << " " << average_solve_timer.GetValue()
-            << std::endl;
-        accumulator.Print(ss.str());
+        //std::stringstream ss;
+        //ss << depth << std::fixed << std::setprecision(2)
+        //    << " " << threads_count
+        //    << " " << ones_count
+        //    << " " << additional_constrains.size()
+        //    << " " << solution.upper_bound
+        //    << " " << average_heuristic_timer.GetValue()
+        //    << " " << average_loop_timer.GetValue()
+        //    << " " << average_solve_timer.GetValue()
+        //    << std::endl;
+        //threading.accumulator.Print(ss.str());
 
-        bool is_zero_branch = ones_count == 0;
-        bool is_hard_branch = ones_count == 1 && is_one_way;
-        bool is_close_to_root = depth < 4;
-        depth++;
-        if (is_zero_branch)
+        if (ones_count == 0)
         {
-            accumulator.Print("\n ZERO SPLIT \n");
-            threads_count += 1;
-
             Branches ways = { { 1.0 }, { 0.0 } };
             auto left = BranchingAsync(ways.first, branch_index);
-            Branching(ways.second, branch_index);
-            left.wait();
-            branches_count += left.get();
+            BranchingZero(ways.second, branch_index);
 
-            threads_count -= 1;
+            statistics += left.get();
         }
         else
         {
-            if (is_hard_branch || is_close_to_root)
-            {
-                accumulator.Print("\n THREAD SPLIT \n");
-                threads_count += 2;
-                auto ways = GetWays(branch_index);
-                auto left = BranchingAsync(ways.first, branch_index);
-                auto right = BranchingAsync(ways.second, branch_index);
-                left.wait();
-                right.wait();
-                branches_count += left.get();
-                branches_count += right.get();
-                threads_count -= 2;
-            }
-            else
-            {
-                auto ways = GetWays(branch_index);
-                Branching(ways.first, branch_index);
-                Branching(ways.second, branch_index);
-            }
+            auto ways = GetWays(branch_index);
+            Branching(ways.first, branch_index);
+            Branching(ways.second, branch_index);
         }
-        depth--;
     }
 
 public:
-    BnCHelper(const ModelData& m, ThreadsAccumulator& p, std::atomic<uint64_t>& best, const Graph& graph)
+    BnCHelper(const ModelData& m, const Graph& graph, ThreadingData& data)
         : model(m)
-        , accumulator(p)
-        , best_obj_value(best)
         , graph(graph)
+        , threading(data)
     {
     };
 
-    uint64_t GetBranchCount() const
+    const Statistics& GetStats() const
     {
-        return branches_count;
+        return statistics;
     }
 
     void BnC(const std::set<uint32_t>& heuristic_clique)
@@ -347,16 +387,19 @@ public:
 std::vector<uint32_t> CliqueFinder::FindMaxCliqueBnB(const Graph& graph)
 {
     ModelData             model(graph, IloNumVar::Float);
-    ThreadsAccumulator    accumulator(graph);
     BranchingStateTracker branching_state_tracker(graph.GetSize());
-    std::atomic<uint64_t> best_obj_value = 1;
-    BnCHelper             bnc_helper(model, accumulator, best_obj_value, graph);
+    ThreadingData         threading_data{ graph };
+    BnCHelper             bnc_helper(model, graph, threading_data);
 
     bnc_helper.BnC(Heuristic(graph));
 
-    std::cout << "Total branches: " << bnc_helper.GetBranchCount() << std::endl << std::endl;
+    auto stats = bnc_helper.GetStats();
+    std::cout << "branches_count: "          << stats.branches_count << std::endl << std::endl;
+    std::cout << "average_heuristic_timer: " << stats.average_heuristic_timer.GetValue() << std::endl << std::endl;
+    std::cout << "average_loop_timer: "      << stats.average_loop_timer.GetValue() << std::endl << std::endl;
+    std::cout << "average_solve_timer: "     << stats.average_solve_timer.GetValue() << std::endl << std::endl;
 
-    auto max_clique = accumulator.GetBestSolution();
+    auto max_clique = threading_data.accumulator.GetBestSolution();
     return { max_clique.begin(), max_clique.end() };
 }
 

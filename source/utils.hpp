@@ -57,11 +57,6 @@ struct ThreadsAccumulator
     {
     }
 
-    void OnBestSolution(const Solution& solution)
-    {
-        OnBestSolution(ExtractClique(solution.variables));
-    }
-
     void OnBestSolution(const std::set<uint32_t>& clique)
     {
         {
@@ -241,6 +236,13 @@ struct AvgTimer
     double GetValue() const
     {
         return avg;
+    }
+
+    AvgTimer& operator+=(const AvgTimer& rhs)
+    {
+        uint32_t sum_cnt = cnt + rhs.cnt;
+        avg = avg * (double(cnt) / double(sum_cnt)) + rhs.avg * (double(rhs.cnt) / double(sum_cnt));
+        return *this;
     }
 
 private:
