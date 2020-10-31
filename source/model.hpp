@@ -35,11 +35,12 @@ struct ModelData
                 for (auto type : g_strategies)
                     m_sum_vert_less_one += m_graph.GetHeuristicConstr(type);
             }
-
-            //auto nodes = graph.GetOrderedNodes(Graph::ColorizationType::mindegree_random);
+        }
+        else
+        {
+            AddNonEdgePairs();
         }
 
-        //AddNonEdgePairs();
         InitModel(m_sum_vert_less_one);
     }
 

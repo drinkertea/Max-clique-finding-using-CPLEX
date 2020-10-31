@@ -264,7 +264,7 @@ void Graph::GetWeightHeuristicConstr(
 
     auto non_adj_sorted = GetWeightlyNonAdj(max, weights);
     int k = 0;
-    int max_cnt = int(sqrt(double(m_graph.size())) * density / 2.0);
+    int max_cnt = int(std::exp(2.71828 * density));
     for (const auto& v : consider)
     {
         if (k++ == max_cnt)
