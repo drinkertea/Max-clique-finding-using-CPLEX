@@ -3,54 +3,6 @@
 #include "model.hpp"
 #include <future>
 
-static std::atomic<uint32_t> threads_count = 0;
-
-struct ThreadingData
-{
-    ThreadsAccumulator      accumulator;
-    std::atomic<uint64_t>   best_obj_value = 1;
-
-    std::condition_variable cv;
-    std::mutex              cv_m;
-    std::atomic<uint32_t>   active_workers_count = 0;
-    const uint32_t          max_workers_count = std::thread::hardware_concurrency();
-
-    struct ScopeGuard
-    {
-        ThreadingData& threading;
-        uint32_t depth = 0;
-        ScopeGuard(ThreadingData& data, uint32_t depth)
-            : threading(data)
-            , depth(depth)
-        {
-            std::unique_lock<std::mutex> lk(threading.cv_m);
-            threading.cv.wait(lk, [this] {
-                return threading.active_workers_count < threading.max_workers_count;
-            });
-            ++threading.active_workers_count;
-
-            std::stringstream ss;
-            ss << std::endl << depth << ": started " << threading.active_workers_count << " / " << threading.max_workers_count;
-            threading.accumulator.Print(ss.str());
-        }
-
-        ~ScopeGuard()
-        {
-            std::stringstream ss;
-            ss << std::endl << depth << ": finished " << threading.active_workers_count << " / " << threading.max_workers_count;
-            threading.accumulator.Print(ss.str());
-
-            --threading.active_workers_count;
-            threading.cv.notify_one();
-        }
-    };
-
-    ScopeGuard GetAsyncGuard(uint32_t depth)
-    {
-        return { *this, depth };
-    }
-};
-
 struct Statistics
 {
     uint64_t branches_count = 0;
@@ -235,12 +187,11 @@ private:
     void Separate(const Solution& solution, std::vector<IndependetConstrain>& additional_constrains)
     {
         TimerGuard tg(statistics.average_heuristic_timer);
-        size_t max_size = 0;
-        graph.GetWeightHeuristicConstr(solution.variables, [this, &additional_constrains, &max_size](auto&& constr) {
+        graph.GetWeightHeuristicConstrFor(solution.branching_index, solution.variables, [this, &additional_constrains](auto&& constr) {
             additional_constrains.emplace_back();
             additional_constrains.back().constrain = model.AddScopedConstrain(constr);
             additional_constrains.back().nodes = std::move(constr);
-        });
+        }, ones_count == 0);
     }
 
     void Cutting(Solution& solution, std::vector<IndependetConstrain>& additional_constrains)
@@ -281,12 +232,11 @@ private:
 
     void PrintStats(const Solution& solution, size_t constr_size)
     {
-        if (depth > 0)
+        if (depth > 0 && ones_count != 0)
             return;
 
         std::stringstream ss;
         ss << depth << std::fixed << std::setprecision(2)
-            << " " << threads_count
             << " " << ones_count
             << " " << constr_size
             << " " << solution.upper_bound
@@ -388,7 +338,6 @@ public:
 std::vector<uint32_t> CliqueFinder::FindMaxCliqueBnB(const Graph& graph)
 {
     ModelData             model(graph, IloNumVar::Float);
-    BranchingStateTracker branching_state_tracker(graph.GetSize());
     ThreadingData         threading_data{ graph };
     BnCHelper             bnc_helper(model, graph, stop, threading_data);
 

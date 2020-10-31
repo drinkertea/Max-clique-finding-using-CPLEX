@@ -168,7 +168,8 @@ struct Graph
     void GetWeightHeuristicConstrFor(
         uint32_t start,
         const std::vector<double>& weights,
-        const std::function<void(std::vector<uint32_t>&&)>& callback
+        const std::function<void(std::vector<uint32_t>&&)>& callback,
+        bool alternative = false
     ) const;
 
     void GetWeightHeuristicConstr(
@@ -248,7 +249,8 @@ struct Graph
         uint32_t start,
         const std::vector<double>& weights,
         const std::function<void(std::vector<uint32_t>&&)>& callback,
-        const std::vector<std::set<WeightNode>>& non_adj_sorted
+        const std::vector<std::set<WeightNode>>& non_adj_sorted,
+        const std::set<WeightNode>& nodes_queue
     ) const;
 
 private:

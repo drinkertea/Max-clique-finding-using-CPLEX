@@ -267,23 +267,33 @@ void Graph::GetWeightHeuristicConstr(
         if (k++ == 10)
             break;
 
-        GetWeightHeuristicConstrFor(v.label, weights, callback, non_adj_sorted);
+        GetWeightHeuristicConstrFor(v.label, weights, callback, non_adj_sorted, non_adj_sorted[v.label]);
     }
 }
 
-void Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights, const std::function<void(std::vector<uint32_t>&&)>& callback) const
+void Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights, const std::function<void(std::vector<uint32_t>&&)>& callback, bool alternative) const
 {
-    GetWeightHeuristicConstrFor(start, weights, callback, GetWeightlyNonAdj(start, weights));
+    auto non_adj = GetWeightlyNonAdj(start, weights);
+    if (alternative)
+    {
+        std::set<WeightNode> consider;
+        for (auto v : m_adj[start])
+            consider.emplace(v, weights[v], m_random_metrics[start][v]);
+
+        return GetWeightHeuristicConstrFor(start, weights, callback, non_adj, consider);
+    }
+    GetWeightHeuristicConstrFor(start, weights, callback, non_adj, non_adj[start]);
 }
 
 void Graph::GetWeightHeuristicConstrFor(
     uint32_t start,
     const std::vector<double>& weights,
     const std::function<void(std::vector<uint32_t>&&)>& callback,
-    const std::vector<std::set<WeightNode>>& non_adj_sorted
+    const std::vector<std::set<WeightNode>>& non_adj_sorted,
+    const std::set<WeightNode>& nodes_queue
 ) const
 {
-    std::set<WeightNode> nodes = non_adj_sorted[start];
+    std::set<WeightNode> nodes = nodes_queue;
 
     std::vector<uint32_t> constr;
     constr.reserve(m_graph.size());
