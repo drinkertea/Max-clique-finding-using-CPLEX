@@ -70,12 +70,13 @@ struct Statistics
 
 class BnCHelper
 {
-    ModelData              model;
-    const Graph&           graph;
-    ThreadingData&         threading;
-    Statistics             statistics{};
-    uint32_t               depth = 0;
-    uint32_t               ones_count = 0;
+    ModelData               model;
+    const Graph&            graph;
+    ThreadingData&          threading;
+    const std::atomic_bool& stop;
+    Statistics              statistics{};
+    uint32_t                depth = 0;
+    uint32_t                ones_count = 0;
 
 public:
     BnCHelper(const BnCHelper& r)
@@ -83,6 +84,7 @@ public:
         , graph(r.graph)
         , depth(r.depth)
         , threading(r.threading)
+        , stop(r.stop)
     {
     }
 
@@ -106,7 +108,7 @@ private:
         ones_count += static_cast<uint32_t>(way.way);
         {
             auto guard = model.AddScopedConstrains(vertex, way.way, way.way);
-            BnC(way.res.variables.empty() ? nullptr : &way.res, way.way == 1.0);
+            BnC(way.res.variables.empty() ? nullptr : &way.res);
         }
         ones_count -= static_cast<uint32_t>(way.way);
         --depth;
@@ -277,7 +279,25 @@ private:
         }
     }
 
-    void BnC(const Solution* initial = nullptr, bool is_one_way = false)
+    void PrintStats(const Solution& solution, size_t constr_size)
+    {
+        if (depth > 0)
+            return;
+
+        std::stringstream ss;
+        ss << depth << std::fixed << std::setprecision(2)
+            << " " << threads_count
+            << " " << ones_count
+            << " " << constr_size
+            << " " << solution.upper_bound
+            << " " << statistics.average_heuristic_timer.GetValue()
+            << " " << statistics.average_loop_timer.GetValue()
+            << " " << statistics.average_solve_timer.GetValue()
+            << std::endl;
+        threading.accumulator.Print(ss.str());
+    }
+
+    void BnC(const Solution* initial = nullptr)
     {
         Solution solution = initial ? *initial : Solve();
         ++statistics.branches_count;
@@ -286,6 +306,7 @@ private:
             return;
 
         std::vector<IndependetConstrain> additional_constrains;
+        additional_constrains.reserve(graph.GetSize() * 10);
         Cutting(solution, additional_constrains);
 
         if (EpsValue(solution.upper_bound) < static_cast<double>(threading.best_obj_value + 1))
@@ -309,24 +330,13 @@ private:
                     additional_constrains.back().nodes = constr;
                 }
 
-                BnC(nullptr, is_one_way);
+                BnC();
             }
             return;
         }
 
         CleanUp(solution, 0, additional_constrains);
-
-        //std::stringstream ss;
-        //ss << depth << std::fixed << std::setprecision(2)
-        //    << " " << threads_count
-        //    << " " << ones_count
-        //    << " " << additional_constrains.size()
-        //    << " " << solution.upper_bound
-        //    << " " << average_heuristic_timer.GetValue()
-        //    << " " << average_loop_timer.GetValue()
-        //    << " " << average_solve_timer.GetValue()
-        //    << std::endl;
-        //threading.accumulator.Print(ss.str());
+        PrintStats(solution, additional_constrains.size());
 
         if (ones_count == 0)
         {
@@ -345,10 +355,11 @@ private:
     }
 
 public:
-    BnCHelper(const ModelData& m, const Graph& graph, ThreadingData& data)
+    BnCHelper(const ModelData& m, const Graph& graph, const std::atomic_bool& stop, ThreadingData& data)
         : model(m)
         , graph(graph)
         , threading(data)
+        , stop(stop)
     {
     };
 
@@ -359,28 +370,18 @@ public:
 
     void BnC(const std::set<uint32_t>& heuristic_clique)
     {
-        Timer timer;
         auto initial_solution = Solve();
         std::cout << "Initial solution:   " << initial_solution.upper_bound << std::endl;
         std::cout << "Heuristic solution: " << heuristic_clique.size() << std::endl;
-        std::cout << "Time:               " << timer.Stop() << " ms" << std::endl << std::endl;
 
         bool initial_better = initial_solution.branching_index == g_invalid_index &&
                               initial_solution.integer_count < heuristic_clique.size() &&
                               graph.CheckSolution(ExtractClique(initial_solution.variables)).empty();
 
         if (!initial_better)
-        {
-            for (auto& x : initial_solution.variables)
-                x = 0.0;
-            for (auto vert : heuristic_clique)
-                initial_solution.variables[vert] = 1.0;
-            initial_solution.upper_bound = static_cast<double>(heuristic_clique.size());
-            initial_solution.integer_count = static_cast<uint64_t>(heuristic_clique.size());
-            OnBestSolution(initial_solution);
-        }
+            OnBestSolution(heuristic_clique);
 
-        BnC(nullptr, true);
+        BnC();
     }
 };
 
@@ -389,15 +390,15 @@ std::vector<uint32_t> CliqueFinder::FindMaxCliqueBnB(const Graph& graph)
     ModelData             model(graph, IloNumVar::Float);
     BranchingStateTracker branching_state_tracker(graph.GetSize());
     ThreadingData         threading_data{ graph };
-    BnCHelper             bnc_helper(model, graph, threading_data);
+    BnCHelper             bnc_helper(model, graph, stop, threading_data);
 
     bnc_helper.BnC(Heuristic(graph));
 
-    auto stats = bnc_helper.GetStats();
-    std::cout << "branches_count: "          << stats.branches_count << std::endl << std::endl;
-    std::cout << "average_heuristic_timer: " << stats.average_heuristic_timer.GetValue() << std::endl << std::endl;
-    std::cout << "average_loop_timer: "      << stats.average_loop_timer.GetValue() << std::endl << std::endl;
-    std::cout << "average_solve_timer: "     << stats.average_solve_timer.GetValue() << std::endl << std::endl;
+    const auto& stats      = bnc_helper.GetStats();
+    branch_count           = stats.branches_count;
+    average_heuristic_time = stats.average_heuristic_timer.GetValue();
+    average_loop_time      = stats.average_loop_timer.GetValue();
+    average_solve_time     = stats.average_solve_timer.GetValue();
 
     auto max_clique = threading_data.accumulator.GetBestSolution();
     return { max_clique.begin(), max_clique.end() };

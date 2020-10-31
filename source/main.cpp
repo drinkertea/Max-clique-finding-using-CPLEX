@@ -42,21 +42,34 @@ void Test(const std::string& file_path, const std::string& path)
         std::cerr << "Something went wrong, please debug me :)" << std::endl;
     }
 
-    std::stringstream ss;
-    ss << "Test graph:                      " << path << std::endl;
-    ss << "Result:                          " << test_result << std::endl;
-    ss << "CPLEX integer algorithm time:    " << int_elapsed << " ms" << std::endl;
-    ss << "Branch and Bound algorithm time: " << bnb_elapsed << " ms" << std::endl;
-    ss << "Branch and Bound branch count:   " << cf.branch_count << std::endl;
-    ss << "Max clique size:                 " << max_clique.size() << std::endl;
-    ss << "Max clique:                      ";
-    for (auto v : max_clique)
-        ss << v << " ";
-    ss << std::endl;
-    ss << std::endl;
+    {
+        std::stringstream ss_far;
+        ss_far << "Test graph:                      " << path << std::endl;
+        ss_far << "Result:                          " << test_result << std::endl;
+        ss_far << "CPLEX integer algorithm time:    " << int_elapsed << " ms" << std::endl;
+        ss_far << "Branch and Bound algorithm time: " << bnb_elapsed << " ms" << std::endl;
+        ss_far << "Branch and Bound branch count:   " << cf.branch_count << std::endl;
+        ss_far << "Average heurisrtic time:         " << cf.average_heuristic_time << std::endl;
+        ss_far << "Average solve time:              " << cf.average_solve_time << std::endl;
+        ss_far << "Average loop time:               " << cf.average_loop_time << std::endl;
+        ss_far << "Max clique size:                 " << max_clique.size() << std::endl;
+        ss_far << "Max clique:                      ";
+        for (auto v : max_clique)
+            ss_far << v << " ";
+        ss_far << std::endl;
+        ss_far << std::endl;
 
-    std::ofstream outfile(file_path, std::ios_base::app);;
-    outfile << ss.str();
+        std::ofstream outfile(file_path, std::ios_base::app);
+        outfile << ss_far.str();
+    }
+    {
+        std::stringstream ss_short;
+        ss_short << path << ";" << bnb_elapsed;
+        ss_short << std::endl;
+
+        std::ofstream outfile_short("short_" + file_path, std::ios_base::app);
+        outfile_short << ss_short.str();
+    }
 }
 
 std::vector<std::string> ReadTasks(const std::string& path)
