@@ -15,7 +15,7 @@ set(SOURCES
     source/solver.cpp
     source/common.hpp
     source/heuristic.hpp
-    source/model.hpp 
+    source/model.hpp
     source/utils.hpp
     source/main.cpp
 )

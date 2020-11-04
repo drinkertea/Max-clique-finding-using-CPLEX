@@ -96,14 +96,14 @@ private:
             auto guard = model.AddScopedConstrains(branch_index, ways.second.way, ways.second.way);
             ways.second.res = Solve();
         }
-        
+
         bool go_right = ways.first.res.integer_count > ways.second.res.integer_count;
         if (ways.first.res.integer_count == ways.second.res.integer_count)
             go_right = ways.first.res.upper_bound > ways.second.res.upper_bound;
-        
+
         if (!go_right)
             std::swap(ways.first, ways.second);
-        
+
         return ways;
     }
 
@@ -144,8 +144,7 @@ private:
         for (size_t i = 0; i < model.GetSize(); ++i)
         {
             res.variables[i] = model.ExtractValue(cplex, i);
-            if (EpsValue(res.variables[i]) == 1.0)
-                ++res.integer_count;
+            res.integer_count += uint64_t(EpsValue(res.variables[i]) == 1.0);
         }
 
         res.branching_index = SelectBranch(res.variables);
