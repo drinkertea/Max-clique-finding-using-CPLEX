@@ -11,8 +11,6 @@ find_package(Cplex)
 set(SOURCES
     source/graph.h
     source/graph.cpp
-    source/solution.h
-    source/solution.cpp
     source/solver.h
     source/solver.cpp
     source/common.hpp

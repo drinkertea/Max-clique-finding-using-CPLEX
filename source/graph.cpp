@@ -6,6 +6,8 @@
 #include "graph.h"
 #include "common.hpp"
 
+static uint32_t seed = 42;
+
 Graph::Graph(const std::string& path)
 {
     std::ifstream infile(path);
@@ -33,7 +35,6 @@ Graph::Graph(const std::string& path)
                 continue;
 
             m_graph.resize(vertex_count, std::vector<bool>(vertex_count, false));
-            m_adj_vec.resize(vertex_count);
             m_adj.resize(vertex_count);
             m_random_metrics.resize(vertex_count);
         }
@@ -52,9 +53,6 @@ Graph::Graph(const std::string& path)
 
             m_adj[a - 1u].emplace(b - 1u);
             m_adj[b - 1u].emplace(a - 1u);
-
-            m_adj_vec[a - 1u].emplace_back(b - 1u);
-            m_adj_vec[b - 1u].emplace_back(a - 1u);
         }
         else
         {
@@ -65,9 +63,9 @@ Graph::Graph(const std::string& path)
     m_non_adj.resize(m_graph.size());
     for (uint32_t i = 0; i < m_graph.size(); ++i)
     {
-        for (uint32_t j = 0; j < m_graph.size(); ++j)
+        for (uint32_t j = i + 1; j < m_graph.size(); ++j)
         {
-            if (i == j || m_graph[i][j])
+            if (m_graph[i][j])
                 continue;
 
             m_non_adj[i].emplace(j);
@@ -128,7 +126,7 @@ std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
 
     std::vector<uint32_t> random_metric(m_graph.size(), 0);
     std::iota(random_metric.begin(), random_metric.end(), 0);
-    std::mt19937 g(42);
+    std::mt19937 g(seed++);
     std::shuffle(random_metric.begin(), random_metric.end(), g);
 
     if (type == ColorizationType::maxdegree)
@@ -170,7 +168,7 @@ std::vector<uint32_t> Graph::GetOrderedNodes(ColorizationType type) const
 struct LocalSearchHelper
 {
     const std::vector<std::set<WeightNode>>& non_adj_sorted;
-    std::mt19937 g{42};
+    std::mt19937 g{ seed++ };
 
     void Search(const std::vector<uint32_t>& constr, const std::vector<double>& weights, uint32_t n, const std::function<void(std::vector<uint32_t>&&)>& callback)
     {
@@ -245,71 +243,21 @@ std::vector<std::set<WeightNode>> Graph::GetWeightlyNonAdj(uint32_t start, const
     return non_adj_sorted;
 }
 
-void Graph::GetWeightHeuristicConstr(
+void Graph::GetWeightHeuristicConstrFor(
+    uint32_t start,
     const std::vector<double>& weights,
     const std::function<void(std::vector<uint32_t>&&)>& callback
 ) const
 {
-    std::set<WeightNode> consider;
-    uint32_t max = 0;
-    for (uint32_t i = 0; i < m_graph.size(); ++i)
-    {
-        auto w = weights[i];
-        if (w < 0.1)
-            continue;
-
-        consider.emplace(i, w, m_random_metrics[i][i]);
-
-        if (weights[max] >= w)
-            continue;
-
-        max = i;
-    }
-    if (consider.empty())
-        return;
-
-    auto non_adj_sorted = GetWeightlyNonAdj(max, weights);
-    int k = 0;
-    int max_cnt = int(std::exp(2.71828 * density));
-    for (const auto& v : consider)
-    {
-        if (k++ == max_cnt)
-            break;
-
-        GetWeightHeuristicConstrFor(v.label, weights, callback, non_adj_sorted, non_adj_sorted[v.label]);
-    }
-}
-
-void Graph::GetWeightHeuristicConstrFor(uint32_t start, const std::vector<double>& weights, const std::function<void(std::vector<uint32_t>&&)>& callback, bool alternative) const
-{
     auto non_adj = GetWeightlyNonAdj(start, weights);
-    if (alternative)
-    {
-        std::set<WeightNode> consider;
-        for (auto v : m_adj[start])
-            consider.emplace(v, weights[v], m_random_metrics[start][v]);
-
-        return GetWeightHeuristicConstrFor(start, weights, callback, non_adj, consider);
-    }
-    GetWeightHeuristicConstrFor(start, weights, callback, non_adj, non_adj[start]);
-}
-
-void Graph::GetWeightHeuristicConstrFor(
-    uint32_t start,
-    const std::vector<double>& weights,
-    const std::function<void(std::vector<uint32_t>&&)>& callback,
-    const std::vector<std::set<WeightNode>>& non_adj_sorted,
-    const std::set<WeightNode>& nodes_queue
-) const
-{
-    std::set<WeightNode> nodes = nodes_queue;
+    std::set<WeightNode> nodes = non_adj[start];
 
     std::vector<uint32_t> constr;
     constr.reserve(m_graph.size());
-    LocalSearchHelper lsh{ non_adj_sorted };
+    LocalSearchHelper lsh{ non_adj };
     while (!nodes.empty())
     {
-        auto t = non_adj_sorted[start] * non_adj_sorted[nodes.begin()->label];
+        auto t = non_adj[start] * non_adj[nodes.begin()->label];
         nodes.erase(nodes.begin());
 
         constr.clear();
@@ -320,7 +268,7 @@ void Graph::GetWeightHeuristicConstrFor(
             auto node = t.begin()->label;
             weight += t.begin()->weight;
 
-            t *= non_adj_sorted[node];
+            t *= non_adj[node];
 
             constr.emplace_back(node);
         }

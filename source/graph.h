@@ -127,11 +127,6 @@ struct Graph
         return m_adj[vertex].size();
     }
 
-    const std::vector<int>& GetAdj(uint32_t vertex) const
-    {
-        return m_adj_vec[vertex];
-    }
-
     const std::set<uint32_t>& GetNeighbors(uint32_t vertex) const
     {
         return m_adj[vertex];
@@ -164,18 +159,6 @@ struct Graph
     }
 
     std::vector<uint32_t> GetOrderedNodes(ColorizationType type) const;
-
-    void GetWeightHeuristicConstrFor(
-        uint32_t start,
-        const std::vector<double>& weights,
-        const std::function<void(std::vector<uint32_t>&&)>& callback,
-        bool alternative = false
-    ) const;
-
-    void GetWeightHeuristicConstr(
-        const std::vector<double>& weights,
-        const std::function<void(std::vector<uint32_t>&&)>& callback
-    ) const;
 
     std::set<std::set<uint32_t>> GetHeuristicConstr(ColorizationType type) const
     {
@@ -248,15 +231,12 @@ struct Graph
     void GetWeightHeuristicConstrFor(
         uint32_t start,
         const std::vector<double>& weights,
-        const std::function<void(std::vector<uint32_t>&&)>& callback,
-        const std::vector<std::set<WeightNode>>& non_adj_sorted,
-        const std::set<WeightNode>& nodes_queue
+        const std::function<void(std::vector<uint32_t>&&)>& callback
     ) const;
 
 private:
     std::vector<std::vector<bool>> m_graph;
     std::vector<std::set<uint32_t>> m_adj;
-    std::vector<std::vector<int>> m_adj_vec;
     std::vector<std::set<uint32_t>> m_non_adj;
 
     std::vector<std::vector<uint32_t>> m_random_metrics;
