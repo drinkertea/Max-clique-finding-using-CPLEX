@@ -36,10 +36,7 @@ struct ModelData
                     m_sum_vert_less_one += m_graph.GetHeuristicConstr(type);
             }
         }
-        else
-        {
-            AddNonEdgePairs();
-        }
+        AddNonEdgePairs();
 
         InitModel(m_sum_vert_less_one);
     }
