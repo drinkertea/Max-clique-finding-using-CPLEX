@@ -27,8 +27,8 @@ struct ModelData
     {
         if (type == IloNumVar::Type::Float)
         {
-            //for (auto type : g_strategies)
-            //    AddPerColorConstrains(type);
+            for (auto type : g_strategies)
+                AddPerColorConstrains(type);
 
             if (!AddRecursiveConstrains())
             {

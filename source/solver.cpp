@@ -187,7 +187,7 @@ private:
     void Separate(const Solution& solution, std::vector<IndependetConstrain>& additional_constrains)
     {
         TimerGuard tg(statistics.average_heuristic_timer);
-        graph.GetWeightHeuristicConstr(solution.variables, [this, &additional_constrains](auto&& constr) {
+        graph.GetWeightHeuristicConstrFor(solution.branching_index, solution.variables, [this, &additional_constrains](auto&& constr) {
             additional_constrains.emplace_back();
             additional_constrains.back().constrain = model.AddScopedConstrain(constr);
             additional_constrains.back().nodes = std::move(constr);

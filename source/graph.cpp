@@ -76,7 +76,13 @@ Graph::Graph(const std::string& path)
     }
 
     for (auto& rm : m_random_metrics)
-        rm = GetOrderedNodes(ColorizationType::random);
+    {
+        auto ordered_nodes = GetOrderedNodes(ColorizationType::mindegree_random);
+        rm.resize(m_graph.size());
+        uint32_t order = 0;
+        for (auto node : ordered_nodes)
+            rm[node] = order++;
+    }
 
     density = double(2 * edge_count) / double(vertex_count * (vertex_count - 1));
 }

@@ -73,7 +73,7 @@ struct ThreadingData
             std::unique_lock<std::mutex> lk(threading.cv_m);
             threading.cv.wait(lk, [this] {
                 return threading.active_workers_count < threading.max_workers_count;
-                });
+            });
             ++threading.active_workers_count;
 
             std::stringstream ss;
