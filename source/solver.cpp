@@ -186,7 +186,11 @@ private:
     void Separate(const Solution& solution, std::vector<IndependetConstrain>& additional_constrains)
     {
         TimerGuard tg(statistics.average_heuristic_timer);
-        graph.GetWeightHeuristicConstrFor(solution.branching_index, solution.variables, [this, &additional_constrains](auto&& constr) {
+        bool is_dens_graph = EpsValue(graph.GetDensity()) >= 0.6;
+        graph.GetWeightHeuristicConstrFor(solution.branching_index, solution.variables, [this, &additional_constrains, is_dens_graph](auto&& constr) {
+            if (is_dens_graph && constr.size() < 5)
+                return;
+
             additional_constrains.emplace_back();
             additional_constrains.back().constrain = model.AddScopedConstrain(constr);
             additional_constrains.back().nodes = std::move(constr);
@@ -258,12 +262,12 @@ private:
             return;
 
         std::vector<IndependetConstrain> additional_constrains;
-        additional_constrains.reserve(graph.GetSize() * 10);
         Cutting(solution, additional_constrains);
 
         if (EpsValue(solution.upper_bound) < static_cast<double>(threading.best_obj_value + 1))
             return;
 
+        CleanUp(solution, 0, additional_constrains);
         size_t branch_index = solution.branching_index;
         if (branch_index == g_invalid_index)
         {
@@ -287,7 +291,6 @@ private:
             return;
         }
 
-        CleanUp(solution, 0, additional_constrains);
         PrintStats(solution, additional_constrains.size());
 
         if (ones_count == 0)

@@ -36,7 +36,10 @@ struct ModelData
                     m_sum_vert_less_one += m_graph.GetHeuristicConstr(type);
             }
         }
-        AddNonEdgePairs();
+        if (type == IloNumVar::Type::Int || EpsValue(m_graph.GetDensity()) >= 0.6)
+        {
+            AddNonEdgePairs();
+        }
 
         InitModel(m_sum_vert_less_one);
     }

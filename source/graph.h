@@ -234,6 +234,11 @@ struct Graph
         const std::function<void(std::vector<uint32_t>&&)>& callback
     ) const;
 
+    double GetDensity() const
+    {
+        return density;
+    }
+
 private:
     std::vector<std::vector<bool>> m_graph;
     std::vector<std::set<uint32_t>> m_adj;
