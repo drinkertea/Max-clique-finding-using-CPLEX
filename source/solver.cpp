@@ -30,6 +30,8 @@ class BnCHelper
     uint32_t                depth = 0;
     uint32_t                ones_count = 0;
 
+    std::unique_ptr<ThreadingData::ScopeGuard> zero_branch_guard;
+
 public:
     BnCHelper(const BnCHelper& r)
         : model(r.model)
@@ -68,11 +70,13 @@ private:
 
     void BranchingZero(const BranchingData& way, size_t vertex)
     {
-        if (depth > 0)
-            return Branching(way, vertex);
+        if (!zero_branch_guard)
+            zero_branch_guard = threading.GetAsyncGuardPtr(depth);
 
-        auto guard = threading.GetAsyncGuard(depth);
         Branching(way, vertex);
+
+        if (zero_branch_guard)
+            zero_branch_guard = nullptr;
     }
 
     auto BranchingAsync(const BranchingData& way, size_t vertex)

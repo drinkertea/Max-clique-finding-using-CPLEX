@@ -70,27 +70,38 @@ struct ThreadingData
             : threading(data)
             , depth(depth)
         {
-            std::unique_lock<std::mutex> lk(threading.cv_m);
-            threading.cv.wait(lk, [this] {
-                return threading.active_workers_count < threading.max_workers_count;
-            });
+            {
+                std::unique_lock<std::mutex> lk(threading.cv_m);
+                threading.cv.wait(lk, [this] {
+                    return threading.active_workers_count < threading.max_workers_count;
+                });
+            }
             ++threading.active_workers_count;
 
-            std::stringstream ss;
-            ss << std::endl << depth << ": started " << threading.active_workers_count << " / " << threading.max_workers_count;
-            threading.accumulator.Print(ss.str());
+            PrintStatus("started");
         }
 
         ~ScopeGuard()
         {
-            std::stringstream ss;
-            ss << std::endl << depth << ": finished " << threading.active_workers_count << " / " << threading.max_workers_count;
-            threading.accumulator.Print(ss.str());
+            PrintStatus("finished");
 
             --threading.active_workers_count;
             threading.cv.notify_one();
         }
+
+    private:
+        void PrintStatus(const std::string& s)
+        {
+            std::stringstream ss;
+            ss << std::endl << std::this_thread::get_id() << ": " << depth << ": " << s << " " << threading.active_workers_count << " / " << threading.max_workers_count;
+            threading.accumulator.Print(ss.str());
+        }
     };
+
+    std::unique_ptr<ScopeGuard> GetAsyncGuardPtr(uint32_t depth)
+    {
+        return std::make_unique<ScopeGuard>(*this, depth);
+    }
 
     ScopeGuard GetAsyncGuard(uint32_t depth)
     {
