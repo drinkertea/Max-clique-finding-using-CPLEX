@@ -1,55 +1,6 @@
 #pragma once
 #include "common.hpp"
 
-using Path = std::vector<std::pair<size_t, double>>;
-struct DepthGuard
-{
-    bool stop = false;
-
-    DepthGuard(Path& p, bool s)
-        : path(p)
-        , stop(s)
-    {
-    }
-
-    ~DepthGuard()
-    {
-        path.pop_back();
-    }
-
-private:
-    Path& path;
-};
-
-struct BranchingStateTracker
-{
-    BranchingStateTracker(size_t md)
-        : max_depth(md)
-    {
-    }
-
-    DepthGuard OnBranch(const Solution& solution, size_t vertex, double constr)
-    {
-        curr_path.emplace_back(vertex, constr);
-        if (solution.integer_count >= 1 || curr_path.size() >= max_depth)
-        {
-            branches.emplace_back(curr_path, solution);
-            return DepthGuard(curr_path, true);
-        }
-        return DepthGuard(curr_path, false);
-    }
-
-    const std::deque<std::pair<Path, Solution>>& GetBranches()
-    {
-        return branches;
-    }
-
-private:
-    std::deque<std::pair<Path, Solution>> branches;
-    size_t                   max_depth = 0;
-    Path                     curr_path;
-};
-
 struct ThreadsAccumulator
 {
     ThreadsAccumulator(const Graph& g)
@@ -57,16 +8,16 @@ struct ThreadsAccumulator
     {
     }
 
-    void OnBestSolution(const Solution& solution)
+    void OnBestSolution(const std::set<uint32_t>& clique)
     {
-        auto clique = ExtractClique(solution.variables);
         {
-            std::lock_guard<std::mutex> lg(solutions_mutex);
-            solutions.emplace_back(solution);
+            std::lock_guard<std::mutex> lg(solution_mutex);
+            if (clique.size() > best_solution.size())
+                best_solution = clique;
         }
 
         std::stringstream ss;
-        ss << "Found " << solution.integer_count << " " << std::endl;
+        ss << "Found " << clique.size() << " " << std::endl;
 
         for (auto v : clique)
             ss << v << " ";
@@ -80,89 +31,82 @@ struct ThreadsAccumulator
         Print(ss.str());
     }
 
-    void ProgressBegin(size_t total)
-    {
-        tasks_total = total;
-    }
-
-    void OnTaskComplete(const Path& path)
-    {
-        std::stringstream ss;
-        ss << "Task finished: " << ++finished_index << " / " << tasks_total << "Path";
-        for (const auto& branch : path)
-            ss << " " << branch.second;
-        ss << std::endl;
-        Print(ss.str());
-    }
-
     void Print(const std::string& str)
     {
         std::lock_guard<std::mutex> lg(print_mutex);
         std::cout << str << std::endl;
     }
 
-    Solution GetBestSolution() const
+    const std::set<uint32_t>& GetBestSolution() const
     {
-        Solution best{};
-        for (const auto& solution : solutions)
-        {
-            if (solution.integer_count <= best.integer_count)
-                continue;
-
-            best = solution;
-        }
-        return best;
+        return best_solution;
     }
 
 private:
     std::atomic<size_t> finished_index = 0;
     std::atomic<size_t> tasks_total = 0;
-
-    std::vector<Solution> solutions;
-    std::mutex            solutions_mutex;
+    std::set<uint32_t>  best_solution;
+    std::mutex          solution_mutex;
 
     std::mutex print_mutex;
     const Graph& graph;
 };
 
-struct ParallelExecturor
+struct ThreadingData
 {
-    using Task = std::function<void()>;
-    using Tasks = std::deque<Task>;
-    ParallelExecturor(Tasks&& tasks, uint32_t thread_count = 0)
-        : tasks(std::move(tasks))
-    {
-        uint32_t n = thread_count;
-        if (n <= 0)
-            n = std::max(std::thread::hardware_concurrency(), 1u);
-        for (uint32_t i = 0; i < n; ++i)
-            execution_threads.emplace_back(&ParallelExecturor::ExecutionThread, this);
-    }
+    ThreadsAccumulator      accumulator;
+    std::atomic<uint64_t>   best_obj_value = 1;
 
-    void WaitForJobDone()
-    {
-        for (auto& thred : execution_threads)
-            thred.join();
-    }
+    std::condition_variable cv;
+    std::mutex              cv_m;
+    std::atomic<uint32_t>   active_workers_count = 0;
+    const uint32_t          max_workers_count = std::thread::hardware_concurrency();
 
-private:
-    void ExecutionThread()
+    struct ScopeGuard
     {
-        while (!tasks.empty())
+        ThreadingData& threading;
+        uint32_t depth = 0;
+        ScopeGuard(ThreadingData& data, uint32_t depth)
+            : threading(data)
+            , depth(depth)
         {
-            Task task;
             {
-                std::unique_lock<std::mutex> lock(tasks_mutex);
-                task.swap(tasks.front());
-                tasks.pop_front();
+                std::unique_lock<std::mutex> lk(threading.cv_m);
+                threading.cv.wait(lk, [this] {
+                    return threading.active_workers_count < threading.max_workers_count;
+                });
             }
-            task();
+            ++threading.active_workers_count;
+
+            PrintStatus("started");
         }
+
+        ~ScopeGuard()
+        {
+            PrintStatus("finished");
+
+            --threading.active_workers_count;
+            threading.cv.notify_one();
+        }
+
+    private:
+        void PrintStatus(const std::string& s)
+        {
+            std::stringstream ss;
+            ss << std::endl << std::this_thread::get_id() << ": " << depth << ": " << s << " " << threading.active_workers_count << " / " << threading.max_workers_count;
+            threading.accumulator.Print(ss.str());
+        }
+    };
+
+    std::unique_ptr<ScopeGuard> GetAsyncGuardPtr(uint32_t depth)
+    {
+        return std::make_unique<ScopeGuard>(*this, depth);
     }
 
-    std::deque<Task>         tasks;
-    std::mutex               tasks_mutex;
-    std::vector<std::thread> execution_threads;
+    ScopeGuard GetAsyncGuard(uint32_t depth)
+    {
+        return { *this, depth };
+    }
 };
 
 struct TimeoutThread
@@ -208,6 +152,65 @@ struct Timer
 
 private:
     std::chrono::system_clock::time_point start;
+};
+
+struct AvgTimer
+{
+    AvgTimer()
+    {
+    }
+
+    void Reset()
+    {
+        timer.Reset();
+    }
+
+    void Stop()
+    {
+        auto elapsed = timer.Stop();
+        if (cnt++ == 0)
+        {
+            avg = double(elapsed);
+        }
+        else
+        {
+            avg += (1.0 / (double(cnt))) * (double(elapsed) - avg);
+        }
+    }
+
+    double GetValue() const
+    {
+        return avg;
+    }
+
+    AvgTimer& operator+=(const AvgTimer& rhs)
+    {
+        uint32_t sum_cnt = cnt + rhs.cnt;
+        avg = avg * (double(cnt) / double(sum_cnt)) + rhs.avg * (double(rhs.cnt) / double(sum_cnt));
+        return *this;
+    }
+
+private:
+    Timer    timer{};
+    double   avg = 0;
+    uint32_t cnt = 0;
+};
+
+struct TimerGuard
+{
+    TimerGuard(AvgTimer& t)
+        : timer(t)
+    {
+        timer.Reset();
+    }
+
+    ~TimerGuard()
+    {
+        timer.Stop();
+    }
+
+private:
+    AvgTimer& timer;
 };
 
 struct NonEdgeKHelper

@@ -58,4 +58,13 @@ struct Solution
     std::vector<double> variables;
     size_t              branching_index = g_invalid_index;
     uint64_t            integer_count = 0;
+
+    template <typename T>
+    double GetNodesWeight(const T& nodes) const
+    {
+        double sum = 0.0;
+        for (auto x : nodes)
+            sum += variables[x];
+        return sum;
+    }
 };

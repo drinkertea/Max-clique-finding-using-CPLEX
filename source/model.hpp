@@ -6,6 +6,7 @@ struct ModelData;
 struct ConstrainsGuard
 {
     ConstrainsGuard(ModelData& model, size_t variable_index, IloNum lowerBound, IloNum upperBound);
+    ConstrainsGuard(ModelData& model, const std::vector<uint32_t>& constr);
     ~ConstrainsGuard();
 
 private:
@@ -35,8 +36,11 @@ struct ModelData
                     m_sum_vert_less_one += m_graph.GetHeuristicConstr(type);
             }
         }
+        if (type == IloNumVar::Type::Int || EpsValue(m_graph.GetDensity()) >= 0.6)
+        {
+            AddNonEdgePairs();
+        }
 
-        AddNonEdgePairs();
         InitModel(m_sum_vert_less_one);
     }
 
@@ -44,10 +48,17 @@ struct ModelData
         : m_graph(r.m_graph)
         , m_size(r.m_size)
         , m_type(r.m_type)
-        , m_model(m_env)
+        , m_model(r.m_model.getClone(m_env))
         , m_variables(m_env, m_size)
     {
-        InitModel(r.m_sum_vert_less_one);
+        auto it = IloModel::Iterator(m_model);
+        while (it.ok())
+        {
+            auto extr = *it;
+            if (extr.isVariable())
+                m_variables[std::stoi(extr.getName())] = extr.asVariable();
+            ++it;
+        }
     }
 
     ~ModelData()
@@ -70,6 +81,11 @@ struct ModelData
     std::unique_ptr<ConstrainsGuard> AddScopedConstrainsPtr(size_t variable_index, IloNum lowerBound, IloNum upperBound)
     {
         return std::make_unique<ConstrainsGuard>(*this, variable_index, lowerBound, upperBound);
+    }
+
+    std::unique_ptr<ConstrainsGuard> AddScopedConstrain(const std::vector<uint32_t>& constr)
+    {
+        return std::make_unique<ConstrainsGuard>(*this, constr);
     }
 
     double ExtractValue(const IloCplex& cplex, size_t variable_index) const
@@ -102,7 +118,7 @@ private:
     {
         for (uint32_t i = 0; i < m_size; ++i)
         {
-            std::string name = "y[" + std::to_string(i + 1) + "]";
+            std::string name = std::to_string(i);
             m_variables[i] = IloNumVar(m_env, 0, 1, m_type, name.c_str());
         }
 
@@ -113,6 +129,7 @@ private:
 
         AddConstrains(m_sum_vert_less_one);
         m_model.add(obj);
+        m_model.add(m_variables);
     }
 
     void AddPerColorConstrains(Graph::ColorizationType type)
@@ -180,7 +197,7 @@ private:
 
     std::set<std::set<uint32_t>> m_sum_vert_less_one;
 
-    const Graph& m_graph;
+    const Graph&    m_graph;
     size_t          m_size = 0;
     IloNumVar::Type m_type;
     IloEnv          m_env{};
@@ -195,6 +212,16 @@ ConstrainsGuard::ConstrainsGuard(ModelData& model, size_t variable_index, IloNum
     std::string name = std::to_string(lowerBound) + " <= y[" + std::to_string(variable_index) + "] <= " + std::to_string(upperBound);
     m_expr += m_model.m_variables[variable_index];
     m_constrain = IloRange(m_model.m_env, lowerBound, m_expr, upperBound, name.c_str());
+    m_constrains = m_model.m_model.add(m_constrain);
+}
+
+ConstrainsGuard::ConstrainsGuard(ModelData& model, const std::vector<uint32_t>& constr)
+    : m_model(model)
+    , m_expr(m_model.m_env)
+{
+    for (auto index : constr)
+        m_expr += m_model.m_variables[index];
+    m_constrain = IloRange(m_model.m_env, 0.0, m_expr, 1.0);
     m_constrains = m_model.m_model.add(m_constrain);
 }
 
